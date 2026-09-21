@@ -1,4 +1,6 @@
 import 'package:e_comerce_appliction/provider/authprovider.dart';
+import 'package:e_comerce_appliction/provider/productprovider.dart';
+import 'package:e_comerce_appliction/provider/userprovider.dart';
 import 'package:e_comerce_appliction/screens/flashe_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -11,7 +13,14 @@ void main() {
     publishableKey: 'sb_publishable_U-xo_RAYLv3OIED5fMFu1A_mAWGIvlm',
   );
   runApp(
-    ChangeNotifierProvider(create: (context) => AthenDiction(), child: MyApp()),
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (contex) => AthenDiction()),
+        ChangeNotifierProvider(create: (contex) => Productprovider()),
+        ChangeNotifierProvider(create: (contex)=> UserProvider()),
+      ],
+      child: MyApp(),
+    ),
   );
 }
 
