@@ -106,7 +106,9 @@ class _HomePageContentState extends State<HomePageContent> {
       backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
         elevation: 0,
-        backgroundColor: isDark ? theme.colorScheme.surface : theme.colorScheme.primary,
+        backgroundColor: isDark
+            ? theme.colorScheme.surface
+            : theme.colorScheme.primary,
         title: Text(
           'E-Commerce',
           style: TextStyle(
@@ -155,9 +157,17 @@ class _HomePageContentState extends State<HomePageContent> {
                   '$name $productCategory $productSubcategory';
               final matchesQuery =
                   query.isEmpty || searchTerms.any(searchableText.contains);
+              final selectedCategory = _selectedCategory.toLowerCase();
               final matchesCategory =
-                  _selectedCategory == 'All' ||
-                  productCategory == _selectedCategory.toLowerCase();
+                  selectedCategory == 'all' ||
+                  productCategory == selectedCategory ||
+                  productSubcategory == selectedCategory ||
+                  (selectedCategory == 'footwear' &&
+                      productCategory == 'fashion') ||
+                  (selectedCategory == 'shoes' &&
+                      productSubcategory.contains('shoe')) ||
+                  (selectedCategory == 'boots' &&
+                      productSubcategory.contains('boot'));
 
               return matchesQuery && matchesCategory;
             }).toList();
@@ -203,7 +213,10 @@ class _HomePageContentState extends State<HomePageContent> {
                   ).animate().fade(delay: 200.ms).slideX(begin: 0.05),
                 ),
                 SliverToBoxAdapter(
-                  child: const HeroSectionWidget().animate().fade(delay: 300.ms).scale(begin: const Offset(0.95, 0.95)),
+                  child: const HeroSectionWidget()
+                      .animate()
+                      .fade(delay: 300.ms)
+                      .scale(begin: const Offset(0.95, 0.95)),
                 ),
                 SliverToBoxAdapter(
                   child: Padding(
@@ -273,7 +286,9 @@ class _HorizontalProductSection extends StatelessWidget {
         children: [
           Text(
             title,
-            style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.bold,
+            ),
           ),
           const SizedBox(height: 8),
           SizedBox(

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class Productprovider extends ChangeNotifier {
@@ -116,6 +117,40 @@ class Productprovider extends ChangeNotifier {
     } catch (error) {
       debugPrint('Error loading related products: $error');
       return [];
+    }
+  }
+
+  Future<String?> uploadProductImage(XFile image) async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null) {
+        errorMessage = 'Please log in as a seller first.';
+        notifyListeners();
+        return null;
+      }
+
+      final bytes = await image.readAsBytes();
+      final fileName = image.name.isEmpty ? 'product.jpg' : image.name;
+      final path =
+          '${user.id}/${DateTime.now().microsecondsSinceEpoch}_$fileName';
+
+      await supabase.storage
+          .from('product-images')
+          .uploadBinary(
+            path,
+            bytes,
+            fileOptions: FileOptions(
+              contentType: image.mimeType ?? 'image/jpeg',
+              upsert: false,
+            ),
+          );
+
+      return supabase.storage.from('product-images').getPublicUrl(path);
+    } catch (error) {
+      errorMessage = 'Image upload failed: $error';
+      debugPrint('Error uploading product image: $error');
+      notifyListeners();
+      return null;
     }
   }
 

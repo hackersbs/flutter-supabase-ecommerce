@@ -1,7 +1,10 @@
+import 'dart:typed_data';
+
 import 'package:e_comerce_appliction/provider/authprovider.dart';
 import 'package:e_comerce_appliction/provider/orderditiyalce.dart';
 import 'package:e_comerce_appliction/provider/productprovider.dart';
 import 'package:flutter/material.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:provider/provider.dart';
 import 'package:e_comerce_appliction/widgets/image_url.dart';
 import 'package:e_comerce_appliction/screens/message_screen.dart';
@@ -55,121 +58,196 @@ class _SellerScreenState extends State<SellerScreen> {
       text: product?['category'] ?? '',
     );
     var selectedCategory = product?['category']?.toString();
-    var selectedSubcategory = product?['subcategory']?.toString();
+    final subcategoryController = TextEditingController(
+      text: product?['subcategory'] ?? '',
+    );
     final quantityController = TextEditingController(
       text: product?['quantity']?.toString() ?? '',
     );
     final imgUrlController = TextEditingController(
       text: product?['img_url'] ?? '',
     );
+    XFile? selectedImage;
+    Uint8List? selectedImageBytes;
+    var isUploadingImage = false;
 
     showDialog(
       context: context,
       builder: (context) {
         return AlertDialog(
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 24,
+          ),
           title: Text(product == null ? 'Add Product' : 'Edit Product'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameController,
-                  decoration: const InputDecoration(labelText: 'Product Name'),
-                ),
-                TextField(
-                  controller: priceController,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: 'Price'),
-                ),
-                TextField(
-                  controller: discountPriceController,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Discount Price (Optional)',
-                  ),
-                ),
-                StatefulBuilder(
-                  builder: (context, setDialogState) {
-                    final category =
-                        catalogCategories.any(
-                          (item) => item.name == selectedCategory,
-                        )
-                        ? selectedCategory
-                        : null;
-                    final categoryData = catalogCategories.firstWhere(
-                      (item) => item.name == category,
-                      orElse: () => catalogCategories.first,
-                    );
-                    return Column(
-                      children: [
-                        DropdownButtonFormField<String>(
-                          initialValue: category,
-                          decoration: const InputDecoration(
-                            labelText: 'Category',
-                          ),
-                          items: catalogCategories
-                              .map(
-                                (item) => DropdownMenuItem(
-                                  value: item.name,
-                                  child: Text(item.name),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: (value) {
-                            setDialogState(() {
-                              selectedCategory = value;
-                              categoryController.text = value ?? 'General';
-                              selectedSubcategory = null;
-                            });
-                          },
+          content: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: 500,
+              maxHeight: MediaQuery.sizeOf(context).height * 0.62,
+            ),
+            child: StatefulBuilder(
+              builder: (context, setDialogState) {
+                return SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextField(
+                        controller: nameController,
+                        decoration: const InputDecoration(
+                          labelText: 'Product Name',
                         ),
-                        const SizedBox(height: 10),
-                        DropdownButtonFormField<String>(
-                          initialValue:
-                              categoryData.subcategories.contains(
-                                selectedSubcategory,
-                              )
-                              ? selectedSubcategory
-                              : null,
-                          decoration: const InputDecoration(
-                            labelText: 'Subcategory',
-                          ),
-                          items: categoryData.subcategories
-                              .map(
-                                (item) => DropdownMenuItem(
-                                  value: item,
-                                  child: Text(item),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: (value) =>
-                              setDialogState(() => selectedSubcategory = value),
+                      ),
+                      TextField(
+                        controller: priceController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(labelText: 'Price'),
+                      ),
+                      TextField(
+                        controller: discountPriceController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Discount Price (Optional)',
                         ),
-                      ],
-                    );
-                  },
-                ),
-                TextField(
-                  controller: descriptionController,
-                  decoration: const InputDecoration(
-                    labelText: 'Description (Optional)',
+                      ),
+                      StatefulBuilder(
+                        builder: (context, setDialogState) {
+                          final category =
+                              catalogCategories.any(
+                                (item) => item.name == selectedCategory,
+                              )
+                              ? selectedCategory
+                              : null;
+                          return Column(
+                            children: [
+                              DropdownButtonFormField<String>(
+                                initialValue: category,
+                                decoration: const InputDecoration(
+                                  labelText: 'Category',
+                                ),
+                                items: catalogCategories
+                                    .map(
+                                      (item) => DropdownMenuItem(
+                                        value: item.name,
+                                        child: Text(item.name),
+                                      ),
+                                    )
+                                    .toList(),
+                                onChanged: (value) {
+                                  setDialogState(() {
+                                    selectedCategory = value;
+                                    categoryController.text =
+                                        value ?? 'General';
+                                  });
+                                },
+                              ),
+                              const SizedBox(height: 10),
+                              TextField(
+                                controller: subcategoryController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Subcategory',
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                      TextField(
+                        controller: descriptionController,
+                        decoration: const InputDecoration(
+                          labelText: 'Description (Optional)',
+                        ),
+                        maxLines: 3,
+                      ),
+                      TextField(
+                        controller: quantityController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Quantity (Optional)',
+                        ),
+                      ),
+                      if (selectedImage != null ||
+                          imgUrlController.text.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: selectedImage != null
+                                ? Image.memory(
+                                    selectedImageBytes!,
+                                    height: 140,
+                                    width: double.infinity,
+                                    fit: BoxFit.cover,
+                                  )
+                                : Image.network(
+                                    imgUrlController.text,
+                                    height: 140,
+                                    width: double.infinity,
+                                    fit: BoxFit.cover,
+                                    errorBuilder:
+                                        (context, error, stackTrace) =>
+                                            const SizedBox(
+                                              height: 140,
+                                              child: Center(
+                                                child: Icon(
+                                                  Icons.broken_image_outlined,
+                                                ),
+                                              ),
+                                            ),
+                                  ),
+                          ),
+                        ),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: isUploadingImage
+                              ? null
+                              : () async {
+                                  try {
+                                    final picked = await openFile(
+                                      acceptedTypeGroups: [
+                                        const XTypeGroup(
+                                          label: 'Images',
+                                          extensions: [
+                                            'jpg',
+                                            'jpeg',
+                                            'png',
+                                            'webp',
+                                          ],
+                                        ),
+                                      ],
+                                    );
+                                    if (picked == null) return;
+                                    final bytes = await picked.readAsBytes();
+                                    if (!context.mounted) return;
+                                    setDialogState(() {
+                                      selectedImage = picked;
+                                      selectedImageBytes = bytes;
+                                    });
+                                  } catch (error) {
+                                    if (!context.mounted) return;
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                          'Could not select image: $error',
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                },
+                          icon: const Icon(Icons.photo_library_outlined),
+                          label: Text(
+                            selectedImage == null
+                                ? 'Choose Product Image'
+                                : 'Change Image',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                  maxLines: 3,
-                ),
-                TextField(
-                  controller: quantityController,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Quantity (Optional)',
-                  ),
-                ),
-                TextField(
-                  controller: imgUrlController,
-                  decoration: const InputDecoration(
-                    labelText: 'Image URL (Optional)',
-                  ),
-                ),
-              ],
+                );
+              },
             ),
           ),
           actions: [
@@ -178,71 +256,101 @@ class _SellerScreenState extends State<SellerScreen> {
               child: const Text('Cancel'),
             ),
             ElevatedButton(
-              onPressed: () async {
-                final name = nameController.text.trim();
-                final category = categoryController.text.trim();
-                final price = double.tryParse(priceController.text) ?? 0.0;
-                final discountPrice = double.tryParse(
-                  discountPriceController.text,
-                );
-                final description = descriptionController.text.trim().isNotEmpty
-                    ? descriptionController.text.trim()
-                    : null;
-                final quantity = int.tryParse(quantityController.text);
-                final imgUrl = imgUrlController.text.trim().isNotEmpty
-                    ? imgUrlController.text.trim()
-                    : null;
-                final productProvider = context.read<Productprovider>();
-                final navigator = Navigator.of(context);
-                final messenger = ScaffoldMessenger.of(context);
-
-                if (name.isNotEmpty && price > 0 && category.isNotEmpty) {
-                  if (product == null) {
-                    final inserted = await productProvider.insertProduct(
-                      name: name,
-                      price: price,
-                      discountPrice: discountPrice,
-                      description: description,
-                      quantity: quantity,
-                      imgUrl: imgUrl,
-                      category: category,
-                      subcategory: selectedSubcategory ?? category,
-                    );
-                    if (!inserted) {
-                      messenger.showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            productProvider.errorMessage ??
-                                'Product could not be added.',
-                          ),
-                        ),
+              onPressed: isUploadingImage
+                  ? null
+                  : () async {
+                      final name = nameController.text.trim();
+                      final category = categoryController.text.trim();
+                      final price =
+                          double.tryParse(priceController.text) ?? 0.0;
+                      final discountPrice = double.tryParse(
+                        discountPriceController.text,
                       );
-                      return;
-                    }
-                  } else {
-                    productProvider.updateProduct(
-                      id: product['id'].toString(),
-                      name: name,
-                      price: price,
-                      discountPrice: discountPrice,
-                      description: description,
-                      quantity: quantity,
-                      imgUrl: imgUrl,
-                      category: category,
-                      subcategory: selectedSubcategory ?? category,
-                    );
-                  }
-                  navigator.pop();
-                } else {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'Please enter valid name, category and price',
-                      ),
-                    ),
-                  );
-                }
-              },
+                      final description =
+                          descriptionController.text.trim().isNotEmpty
+                          ? descriptionController.text.trim()
+                          : null;
+                      final quantity = int.tryParse(quantityController.text);
+                      final productProvider = context.read<Productprovider>();
+                      final navigator = Navigator.of(context);
+                      final messenger = ScaffoldMessenger.of(context);
+
+                      if (name.isNotEmpty && price > 0 && category.isNotEmpty) {
+                        if (selectedImage != null) {
+                          setState(() => isUploadingImage = true);
+                          final uploadedUrl = await productProvider
+                              .uploadProductImage(selectedImage!);
+                          if (uploadedUrl == null) {
+                            setState(() => isUploadingImage = false);
+                            messenger.showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  productProvider.errorMessage ??
+                                      'Image upload failed.',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+                          imgUrlController.text = uploadedUrl;
+                          setState(() => isUploadingImage = false);
+                        }
+                        final imgUrl = imgUrlController.text.trim().isNotEmpty
+                            ? imgUrlController.text.trim()
+                            : null;
+
+                        if (product == null) {
+                          final inserted = await productProvider.insertProduct(
+                            name: name,
+                            price: price,
+                            discountPrice: discountPrice,
+                            description: description,
+                            quantity: quantity,
+                            imgUrl: imgUrl,
+                            category: category,
+                            subcategory:
+                                subcategoryController.text.trim().isNotEmpty
+                                ? subcategoryController.text.trim()
+                                : category,
+                          );
+                          if (!inserted) {
+                            messenger.showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  productProvider.errorMessage ??
+                                      'Product could not be added.',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+                        } else {
+                          productProvider.updateProduct(
+                            id: product['id'].toString(),
+                            name: name,
+                            price: price,
+                            discountPrice: discountPrice,
+                            description: description,
+                            quantity: quantity,
+                            imgUrl: imgUrl,
+                            category: category,
+                            subcategory:
+                                subcategoryController.text.trim().isNotEmpty
+                                ? subcategoryController.text.trim()
+                                : category,
+                          );
+                        }
+                        navigator.pop();
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Please enter valid name, category and price',
+                            ),
+                          ),
+                        );
+                      }
+                    },
               child: const Text('Save'),
             ),
           ],
@@ -264,43 +372,58 @@ class _SellerScreenState extends State<SellerScreen> {
           const AccountScreen(),
         ],
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _selectedIndex,
-        onDestinationSelected: (index) {
-          setState(() => _selectedIndex = index);
-          if (index == 0) {
-            context.read<OrderDitiyalce>().loadSellerDashboard();
-          } else if (index == 2) {
-            context.read<OrderDitiyalce>().loadSellerOrders();
-          }
+      bottomNavigationBar: LayoutBuilder(
+        builder: (context, constraints) {
+          return NavigationBar(
+            height: 68,
+            labelTextStyle: WidgetStatePropertyAll(
+              const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                height: 1,
+              ),
+            ),
+            labelBehavior: constraints.maxWidth < 600
+                ? NavigationDestinationLabelBehavior.onlyShowSelected
+                : NavigationDestinationLabelBehavior.alwaysShow,
+            selectedIndex: _selectedIndex,
+            onDestinationSelected: (index) {
+              setState(() => _selectedIndex = index);
+              if (index == 0) {
+                context.read<OrderDitiyalce>().loadSellerDashboard();
+              } else if (index == 2) {
+                context.read<OrderDitiyalce>().loadSellerOrders();
+              }
+            },
+            destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.dashboard_outlined),
+                selectedIcon: Icon(Icons.dashboard),
+                label: 'Dash',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.inventory_2_outlined),
+                selectedIcon: Icon(Icons.inventory_2),
+                label: 'Products',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.local_shipping_outlined),
+                selectedIcon: Icon(Icons.local_shipping),
+                label: 'Orders',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.message_outlined),
+                selectedIcon: Icon(Icons.message),
+                label: 'Messages',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.person_outline),
+                selectedIcon: Icon(Icons.person),
+                label: 'Profile',
+              ),
+            ],
+          );
         },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.dashboard_outlined),
-            selectedIcon: Icon(Icons.dashboard),
-            label: 'Dashboard',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.inventory_2_outlined),
-            selectedIcon: Icon(Icons.inventory_2),
-            label: 'Products',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.local_shipping_outlined),
-            selectedIcon: Icon(Icons.local_shipping),
-            label: 'Orders',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.message_outlined),
-            selectedIcon: Icon(Icons.message),
-            label: 'Messages',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person),
-            label: 'Profile',
-          ),
-        ],
       ),
     );
   }
@@ -821,7 +944,8 @@ class _SellerScreenState extends State<SellerScreen> {
                               ),
                             const SizedBox(height: 4),
                             // Pricing
-                            Row(
+                            Wrap(
+                              spacing: 8,
                               children: [
                                 if (product['discount_price'] != null) ...[
                                   Text(
@@ -832,7 +956,6 @@ class _SellerScreenState extends State<SellerScreen> {
                                       fontSize: 12,
                                     ),
                                   ),
-                                  const SizedBox(width: 8),
                                   Text(
                                     '\$${product['discount_price']}',
                                     style: const TextStyle(
@@ -853,12 +976,24 @@ class _SellerScreenState extends State<SellerScreen> {
                             ),
                             const SizedBox(height: 4),
                             // Quantity & Date
-                            Text(
-                              'Qty: ${product['quantity'] ?? 0} | Added: ${product['created_at'] != null ? DateTime.parse(product['created_at']).toLocal().toString().split(' ')[0] : 'N/A'}',
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey,
-                              ),
+                            Wrap(
+                              spacing: 8,
+                              children: [
+                                Text(
+                                  'Qty: ${product['quantity'] ?? 0}',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey,
+                                  ),
+                                ),
+                                Text(
+                                  'Added: ${product['created_at'] != null ? DateTime.parse(product['created_at']).toLocal().toString().split(' ')[0] : 'N/A'}',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey,
+                                  ),
+                                ),
+                              ],
                             ),
                             const SizedBox(height: 4),
                             // Description
@@ -881,8 +1016,6 @@ class _SellerScreenState extends State<SellerScreen> {
                             icon: const Icon(Icons.edit, color: Colors.blue),
                             onPressed: () =>
                                 _showProductDialog(product: product),
-                            constraints: const BoxConstraints(),
-                            padding: const EdgeInsets.all(4),
                           ),
                           IconButton(
                             icon: const Icon(Icons.delete, color: Colors.red),
@@ -891,8 +1024,6 @@ class _SellerScreenState extends State<SellerScreen> {
                                 product['id'].toString(),
                               );
                             },
-                            constraints: const BoxConstraints(),
-                            padding: const EdgeInsets.all(4),
                           ),
                         ],
                       ),
@@ -949,26 +1080,39 @@ class _DashboardFilters extends StatelessWidget {
               style: TextStyle(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: _DashboardDropdown(
-                    label: 'Country',
-                    value: selectedCountry,
-                    items: countries,
-                    onChanged: onCountryChanged,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _DashboardDropdown(
-                    label: 'State',
-                    value: selectedState,
-                    items: states,
-                    onChanged: onStateChanged,
-                  ),
-                ),
-              ],
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final countryDropdown = _DashboardDropdown(
+                  label: 'Country',
+                  value: selectedCountry,
+                  items: countries,
+                  onChanged: onCountryChanged,
+                );
+                final stateDropdown = _DashboardDropdown(
+                  label: 'State',
+                  value: selectedState,
+                  items: states,
+                  onChanged: onStateChanged,
+                );
+
+                if (constraints.maxWidth < 420) {
+                  return Column(
+                    children: [
+                      countryDropdown,
+                      const SizedBox(height: 10),
+                      stateDropdown,
+                    ],
+                  );
+                }
+
+                return Row(
+                  children: [
+                    Expanded(child: countryDropdown),
+                    const SizedBox(width: 8),
+                    Expanded(child: stateDropdown),
+                  ],
+                );
+              },
             ),
             const SizedBox(height: 10),
             _DashboardDropdown(
@@ -1009,7 +1153,12 @@ class _DashboardDropdown extends StatelessWidget {
         contentPadding: const EdgeInsets.symmetric(horizontal: 10),
       ),
       items: items
-          .map((item) => DropdownMenuItem(value: item, child: Text(item)))
+          .map(
+            (item) => DropdownMenuItem(
+              value: item,
+              child: Text(item, overflow: TextOverflow.ellipsis),
+            ),
+          )
           .toList(),
       onChanged: (nextValue) {
         if (nextValue != null) onChanged(nextValue);
@@ -1036,21 +1185,30 @@ class _MetricCard extends StatelessWidget {
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
-            Icon(icon, color: color, size: 26),
-            Text(
-              value,
-              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            Icon(icon, color: color, size: 22),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                value,
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ),
-            Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Colors.grey, fontSize: 12),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.grey, fontSize: 11),
+              ),
             ),
           ],
         ),

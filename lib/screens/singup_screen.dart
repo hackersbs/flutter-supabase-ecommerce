@@ -21,6 +21,8 @@ class _SingupScreenState extends State<SingupScreen> {
   final TextEditingController _stateController = TextEditingController();
   final TextEditingController _cityController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
+  final TextEditingController _confirmPasswordController =
+      TextEditingController();
 
   @override
   void dispose() {
@@ -32,6 +34,7 @@ class _SingupScreenState extends State<SingupScreen> {
     _stateController.dispose();
     _cityController.dispose();
     _passwordController.dispose();
+    _confirmPasswordController.dispose();
     super.dispose();
   }
 
@@ -134,6 +137,24 @@ class _SingupScreenState extends State<SingupScreen> {
                           ).animate().fade(delay: 450.ms).slideX(begin: -0.05),
                           const SizedBox(height: 16),
                           TextField(
+                            controller: _passwordController,
+                            obscureText: true,
+                            decoration: InputDecoration(
+                              labelText: 'Password',
+                              prefixIcon: const Icon(Icons.lock_outline),
+                            ),
+                          ).animate().fade(delay: 500.ms).slideX(begin: -0.05),
+                          const SizedBox(height: 16),
+                          TextField(
+                            controller: _confirmPasswordController,
+                            obscureText: true,
+                            decoration: InputDecoration(
+                              labelText: 'Confirm Password',
+                              prefixIcon: const Icon(Icons.lock_reset_outlined),
+                            ),
+                          ).animate().fade(delay: 550.ms).slideX(begin: -0.05),
+                          const SizedBox(height: 16),
+                          TextField(
                             controller: _phoneController,
                             keyboardType: TextInputType.phone,
                             decoration: InputDecoration(
@@ -219,25 +240,40 @@ class _SingupScreenState extends State<SingupScreen> {
                               }
                             },
                           ).animate().fade(delay: 700.ms).slideX(begin: -0.05),
-                          const SizedBox(height: 16),
-                          TextField(
-                            controller: _passwordController,
-                            obscureText: true,
-                            decoration: InputDecoration(
-                              labelText: 'Password',
-                              prefixIcon: const Icon(Icons.lock_outline),
-                            ),
-                          ).animate().fade(delay: 750.ms).slideX(begin: -0.05),
                           const SizedBox(height: 24),
                           SizedBox(
                             width: double.infinity,
                             height: 56,
                             child: FilledButton(
                               onPressed: () {
+                                final password = _passwordController.text;
+                                final confirmPassword =
+                                    _confirmPasswordController.text;
+
+                                if (password.length < 6) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        'Password must be at least 6 characters.',
+                                      ),
+                                    ),
+                                  );
+                                  return;
+                                }
+
+                                if (password != confirmPassword) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Passwords do not match.'),
+                                    ),
+                                  );
+                                  return;
+                                }
+
                                 context.read<AthenDiction>().signUp(
                                   context,
                                   _emailController.text,
-                                  _passwordController.text,
+                                  password,
                                   _nameController.text,
                                   _phoneController.text,
                                   _addressController.text,

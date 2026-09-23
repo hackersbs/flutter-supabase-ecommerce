@@ -14,6 +14,7 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
+  bool _obscurePassword = true;
 
   @override
   void dispose() {
@@ -99,17 +100,32 @@ class _LoginScreenState extends State<LoginScreen> {
                           TextField(
                             controller: _emailController,
                             decoration: InputDecoration(
-                              labelText: 'Email/Phone Number',
+                              labelText: 'Email',
                               prefixIcon: const Icon(Icons.person_outline),
                             ),
                           ).animate().fade(delay: 400.ms).slideX(begin: -0.05),
                           const SizedBox(height: 16),
                           TextField(
                             controller: _passwordController,
-                            obscureText: true,
+                            obscureText: _obscurePassword,
                             decoration: InputDecoration(
                               labelText: 'Password',
                               prefixIcon: const Icon(Icons.lock_outline),
+                              suffixIcon: IconButton(
+                                tooltip: _obscurePassword
+                                    ? 'Show password'
+                                    : 'Hide password',
+                                icon: Icon(
+                                  _obscurePassword
+                                      ? Icons.visibility_outlined
+                                      : Icons.visibility_off_outlined,
+                                ),
+                                onPressed: () {
+                                  setState(() {
+                                    _obscurePassword = !_obscurePassword;
+                                  });
+                                },
+                              ),
                             ),
                           ).animate().fade(delay: 500.ms).slideX(begin: -0.05),
                           const SizedBox(height: 8),

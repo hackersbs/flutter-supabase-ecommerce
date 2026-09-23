@@ -75,6 +75,9 @@ class CategoryWidget extends StatelessWidget {
       ...catalogCategories.map(
         (category) => {'icon': category.icon, 'name': category.name},
       ),
+      {'icon': Icons.sports_soccer_outlined, 'name': 'Footwear'},
+      {'icon': Icons.snowshoeing_outlined, 'name': 'Shoes'},
+      {'icon': Icons.hiking_outlined, 'name': 'Boots'},
     ];
     return Container(
       height: 100,
@@ -395,11 +398,14 @@ class FlipkartCardWidget extends StatelessWidget {
                                 borderRadius: BorderRadius.circular(8),
                               ),
                             ),
-                            child: const Text(
-                              'Add to Cart',
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
+                            child: const FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(
+                                'Add to Cart',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                             ),
                           ),
@@ -430,11 +436,14 @@ class FlipkartCardWidget extends StatelessWidget {
                                 borderRadius: BorderRadius.circular(8),
                               ),
                             ),
-                            child: const Text(
-                              'Buy Now',
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
+                            child: const FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(
+                                'Buy Now',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                             ),
                           ),
