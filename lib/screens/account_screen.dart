@@ -5,6 +5,7 @@ import 'package:e_comerce_appliction/screens/login_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:e_comerce_appliction/widgets/error_state.dart';
 
 class AccountScreen extends StatefulWidget {
   const AccountScreen({super.key});
@@ -64,7 +65,12 @@ class _AccountScreenState extends State<AccountScreen> {
     setState(() => _isSaving = false);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(success ? 'Profile updated' : 'Profile update failed'),
+        content: Text(
+          success
+              ? 'Profile updated'
+              : context.read<UserProvider>().errorMessage ??
+                    'Profile update failed',
+        ),
       ),
     );
   }
@@ -98,14 +104,23 @@ class _AccountScreenState extends State<AccountScreen> {
           ),
           ElevatedButton(
             onPressed: () {
-              if (controller.text.length < 6 ||
-                  controller.text != confirmController.text) {
+              if (controller.text.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Password cannot be empty.')),
+                );
+                return;
+              }
+              if (controller.text.length < 6) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
-                    content: Text(
-                      'Passwords must match and be at least 6 characters.',
-                    ),
+                    content: Text('Password must be at least 6 characters.'),
                   ),
+                );
+                return;
+              }
+              if (controller.text != confirmController.text) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Passwords do not match.')),
                 );
                 return;
               }
@@ -123,7 +138,12 @@ class _AccountScreenState extends State<AccountScreen> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(success ? 'Password updated' : 'Password update failed'),
+        content: Text(
+          success
+              ? 'Password updated'
+              : context.read<UserProvider>().errorMessage ??
+                    'Password update failed',
+        ),
       ),
     );
   }
@@ -160,7 +180,12 @@ class _AccountScreenState extends State<AccountScreen> {
       );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Account could not be deleted.')),
+        SnackBar(
+          content: Text(
+            context.read<UserProvider>().errorMessage ??
+                'Account could not be deleted.',
+          ),
+        ),
       );
     }
   }
@@ -175,6 +200,11 @@ class _AccountScreenState extends State<AccountScreen> {
       appBar: AppBar(title: const Text('Profile')),
       body: userProvider.isLoading
           ? const Center(child: CircularProgressIndicator())
+          : userProvider.errorMessage != null && userProvider.userData.isEmpty
+          ? ErrorState(
+              message: userProvider.errorMessage!,
+              onRetry: userProvider.loadUser,
+            )
           : Form(
               key: _formKey,
               child: Center(

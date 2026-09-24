@@ -5,6 +5,8 @@ import 'package:e_comerce_appliction/provider/reviewprovider.dart';
 import 'package:e_comerce_appliction/widgets/home_widgets.dart';
 import 'package:e_comerce_appliction/widgets/image_url.dart';
 import 'package:flutter/material.dart';
+import 'package:e_comerce_appliction/utils/currency.dart';
+import 'package:e_comerce_appliction/utils/product_pricing.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -67,20 +69,11 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
     }
   }
 
-  double _number(String key) {
-    final value = widget.product[key];
-    return value is num ? value.toDouble() : double.tryParse('$value') ?? 0;
-  }
+  double get _price => productPrice(widget.product, 'price');
+  bool get _hasDiscount => hasProductDiscount(widget.product);
+  double get _sellingPrice => activeProductPrice(widget.product);
 
-  double get _price => _number('price');
-  double get _discountPrice => _number('discount_price');
-  bool get _hasDiscount => _discountPrice > 0 && _discountPrice < _price;
-  double get _sellingPrice => _hasDiscount ? _discountPrice : _price;
-
-  int get _discountPercentage {
-    if (!_hasDiscount || _price <= 0) return 0;
-    return ((_price - _discountPrice) / _price * 100).round();
-  }
+  int get _discountPercentage => productDiscountPercentage(widget.product);
 
   List<Map<String, dynamic>> _suggestions(BuildContext context) {
     final allProducts = context.read<Productprovider>().products;
@@ -93,14 +86,14 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
           item['category']?.toString().toLowerCase() == category;
     }).toList();
     sameCategory.sort(
-      (first, second) => (_priceValue(first) - price).abs().compareTo(
-        (_priceValue(second) - price).abs(),
+      (first, second) => (activeProductPrice(first) - price).abs().compareTo(
+        (activeProductPrice(second) - price).abs(),
       ),
     );
     final remaining = allProducts.where((item) {
       return item['id']?.toString() != currentId &&
           !sameCategory.contains(item) &&
-          (_priceValue(item) - price).abs() <= price * 0.5;
+          (activeProductPrice(item) - price).abs() <= price * 0.5;
     }).toList();
     final fallback = [...sameCategory, ...remaining].take(4).toList();
     final combined = <Map<String, dynamic>>[];
@@ -115,26 +108,18 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
     return combined.take(4).toList();
   }
 
-  double _priceValue(Map<String, dynamic> product) {
-    final discount = product['discount_price'];
-    final price = product['price'];
-    final discountValue = discount is num
-        ? discount.toDouble()
-        : double.tryParse('$discount') ?? 0;
-    final priceValue = price is num
-        ? price.toDouble()
-        : double.tryParse('$price') ?? 0;
-    return discountValue > 0 && discountValue < priceValue
-        ? discountValue
-        : priceValue;
-  }
-
-  void _addToCart() {
-    context.read<CardeProvider>().addToCart(widget.product);
+  Future<void> _addToCart() async {
+    final cartProvider = context.read<CardeProvider>();
+    final added = await cartProvider.addToCart(widget.product);
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Product added to cart'),
-        duration: Duration(seconds: 1),
+      SnackBar(
+        content: Text(
+          added
+              ? 'Product added to cart'
+              : cartProvider.errorMessage ?? 'Product could not be added',
+        ),
+        duration: const Duration(seconds: 1),
       ),
     );
   }
@@ -237,7 +222,9 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          saved ? 'Review saved' : 'Only buyers can review this product.',
+          saved
+              ? 'Review saved'
+              : provider.errorMessage ?? 'Only buyers can review this product.',
         ),
       ),
     );
@@ -250,6 +237,22 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
           return const Padding(
             padding: EdgeInsets.symmetric(vertical: 20),
             child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        if (provider.errorMessage != null && provider.reviews.isEmpty) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(provider.errorMessage!),
+              TextButton.icon(
+                onPressed: () {
+                  final productId = widget.product['id']?.toString();
+                  if (productId != null) provider.loadReviews(productId);
+                },
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry reviews'),
+              ),
+            ],
           );
         }
         return Column(
@@ -363,18 +366,12 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
             child: Container(
               color: Theme.of(context).colorScheme.surface,
               padding: const EdgeInsets.all(16),
-              child: isValidImageUrl(imageUrl)
-                  ? Image.network(
-                      imageUrl!,
-                      fit: BoxFit.contain,
-                      errorBuilder: (context, error, stackTrace) =>
-                          const Icon(Icons.broken_image_outlined, size: 72),
-                    )
-                  : const Icon(
-                      Icons.image_not_supported_outlined,
-                      size: 72,
-                      color: Colors.grey,
-                    ),
+              child: ProductImage(
+                imageUrl: imageUrl,
+                width: double.infinity,
+                height: double.infinity,
+                fit: BoxFit.contain,
+              ),
             ),
           ),
           Padding(
@@ -396,7 +393,7 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                   runSpacing: 6,
                   children: [
                     Text(
-                      '₹${_sellingPrice.toStringAsFixed(2)}',
+                      formatIndianRupees(_sellingPrice),
                       style: const TextStyle(
                         color: Color(0xFF2874F0),
                         fontSize: 24,
@@ -405,7 +402,7 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                     ),
                     if (_hasDiscount) ...[
                       Text(
-                        '₹${_price.toStringAsFixed(2)}',
+                        formatIndianRupees(_price),
                         style: const TextStyle(
                           color: Colors.grey,
                           decoration: TextDecoration.lineThrough,

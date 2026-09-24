@@ -10,6 +10,8 @@ import 'package:e_comerce_appliction/data/catalog.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:e_comerce_appliction/widgets/error_state.dart';
+import 'package:speech_to_text/speech_to_text.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -81,7 +83,9 @@ class HomePageContent extends StatefulWidget {
 
 class _HomePageContentState extends State<HomePageContent> {
   final TextEditingController _searchController = TextEditingController();
+  final SpeechToText _speechToText = SpeechToText();
   String _selectedCategory = 'All';
+  bool _isListening = false;
 
   @override
   void initState() {
@@ -91,8 +95,63 @@ class _HomePageContentState extends State<HomePageContent> {
     });
   }
 
+  Future<void> _toggleVoiceSearch() async {
+    try {
+      final available = await _speechToText.initialize(
+        onStatus: (status) {
+          if (!mounted) return;
+          setState(() => _isListening = status == 'listening');
+        },
+        onError: (error) {
+          if (!mounted) return;
+          setState(() => _isListening = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Voice search error: ${error.errorMsg}')),
+          );
+        },
+      );
+
+      if (!available) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Voice search is not available on this device.'),
+          ),
+        );
+        return;
+      }
+
+      if (_isListening) {
+        await _speechToText.stop();
+        setState(() => _isListening = false);
+        return;
+      }
+
+      await _speechToText.listen(
+        onResult: (result) {
+          if (!mounted) return;
+          final words = result.recognizedWords.trim();
+          if (words.isEmpty) return;
+          setState(() {
+            _searchController.text = words;
+            _searchController.selection = TextSelection.collapsed(
+              offset: words.length,
+            );
+          });
+        },
+      );
+      setState(() => _isListening = true);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _isListening = false);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Voice search failed: $error')));
+    }
+  }
+
   @override
   void dispose() {
+    _speechToText.stop();
     _searchController.dispose();
     super.dispose();
   }
@@ -143,6 +202,14 @@ class _HomePageContentState extends State<HomePageContent> {
         },
         child: Consumer<Productprovider>(
           builder: (context, provider, child) {
+            if (!provider.isLoading &&
+                provider.errorMessage != null &&
+                provider.products.isEmpty) {
+              return ErrorState(
+                message: provider.errorMessage!,
+                onRetry: provider.getProduct,
+              );
+            }
             final query = _searchController.text.trim().toLowerCase();
             final searchTerms = smartSearchTerms(query);
             final filteredProducts = provider.products.where((product) {
@@ -171,30 +238,29 @@ class _HomePageContentState extends State<HomePageContent> {
 
               return matchesQuery && matchesCategory;
             }).toList();
+            final foodProducts = provider.products.where((product) {
+              final category = (product['category'] ?? '')
+                  .toString()
+                  .toLowerCase();
+              final subcategory = (product['subcategory'] ?? '')
+                  .toString()
+                  .toLowerCase();
+              return category == 'food' ||
+                  subcategory == 'food' ||
+                  subcategory == 'snacks' ||
+                  subcategory == 'beverages' ||
+                  subcategory == 'bakery' ||
+                  subcategory == 'grocery' ||
+                  subcategory == 'organic';
+            }).toList();
 
             return CustomScrollView(
               slivers: [
-                if (provider.likedProducts.isNotEmpty &&
-                    _searchController.text.trim().isEmpty &&
-                    _selectedCategory == 'All')
-                  SliverToBoxAdapter(
-                    child: _HorizontalProductSection(
-                      title: 'Your favorites',
-                      products: provider.likedProducts,
-                    ),
-                  ),
-                if (provider.popularProducts.isNotEmpty &&
-                    _searchController.text.trim().isEmpty &&
-                    _selectedCategory == 'All')
-                  SliverToBoxAdapter(
-                    child: _HorizontalProductSection(
-                      title: 'Popular with buyers',
-                      products: provider.popularProducts,
-                    ),
-                  ),
                 SliverToBoxAdapter(
                   child: SearchBarWidget(
                     controller: _searchController,
+                    isListening: _isListening,
+                    onMicPressed: _toggleVoiceSearch,
                     onChanged: (_) {
                       setState(() {});
                     },
@@ -218,6 +284,33 @@ class _HomePageContentState extends State<HomePageContent> {
                       .fade(delay: 300.ms)
                       .scale(begin: const Offset(0.95, 0.95)),
                 ),
+                if (provider.popularProducts.isNotEmpty &&
+                    _searchController.text.trim().isEmpty &&
+                    _selectedCategory == 'All')
+                  SliverToBoxAdapter(
+                    child: _HorizontalProductSection(
+                      title: 'Most searched items',
+                      products: provider.popularProducts,
+                    ).animate().fade(delay: 350.ms).slideY(begin: 0.05),
+                  ),
+                if (_searchController.text.trim().isEmpty &&
+                    _selectedCategory == 'All' &&
+                    foodProducts.isNotEmpty)
+                  SliverToBoxAdapter(
+                    child: _HorizontalProductSection(
+                      title: 'Food picks',
+                      products: foodProducts,
+                    ).animate().fade(delay: 400.ms).slideY(begin: 0.05),
+                  ),
+                if (provider.likedProducts.isNotEmpty &&
+                    _searchController.text.trim().isEmpty &&
+                    _selectedCategory == 'All')
+                  SliverToBoxAdapter(
+                    child: _HorizontalProductSection(
+                      title: 'Your favorites',
+                      products: provider.likedProducts,
+                    ).animate().fade(delay: 450.ms).slideY(begin: 0.05),
+                  ),
                 SliverToBoxAdapter(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),

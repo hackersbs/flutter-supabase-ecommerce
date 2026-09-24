@@ -122,24 +122,42 @@ class _ChatScreenState extends State<ChatScreen> {
   List<Map<String, dynamic>> _messages = [];
   bool _isLoading = true;
   bool _isSending = false;
+  MessageProvider? _messageProvider;
 
   @override
   void initState() {
     super.initState();
+    final provider = context.read<MessageProvider>();
+    _messageProvider = provider;
+    provider.addListener(_handleProviderUpdate);
     _loadConversation();
   }
 
   @override
   void dispose() {
+    _messageProvider?.removeListener(_handleProviderUpdate);
     _controller.dispose();
     _scrollController.dispose();
     super.dispose();
   }
 
+  void _handleProviderUpdate() {
+    if (!mounted) return;
+    final provider = _messageProvider;
+    if (provider == null) return;
+    final messages = provider.conversationFor(widget.contact.userId);
+    if (messages.isEmpty && _messages.isNotEmpty) return;
+    setState(() {
+      _messages = messages;
+      _isLoading = false;
+    });
+    _scrollToBottom();
+  }
+
   Future<void> _loadConversation() async {
-    final messages = await context.read<MessageProvider>().loadConversation(
-      widget.contact.userId,
-    );
+    final provider = _messageProvider;
+    if (provider == null) return;
+    final messages = await provider.loadConversation(widget.contact.userId);
     if (!mounted) return;
     setState(() {
       _messages = messages;
@@ -150,20 +168,22 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _send() async {
     if (_isSending || _controller.text.trim().isEmpty) return;
+    final provider = _messageProvider;
+    if (provider == null) return;
     final text = _controller.text;
     _controller.clear();
     setState(() => _isSending = true);
-    final sent = await context.read<MessageProvider>().sendMessage(
+    final sent = await provider.sendMessage(
       contact: widget.contact,
       body: text,
     );
     if (!mounted) return;
     setState(() => _isSending = false);
-    if (sent) {
-      await _loadConversation();
-    } else {
+    if (!sent) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Message could not be sent.')),
+        SnackBar(
+          content: Text(provider.errorMessage ?? 'Message could not be sent.'),
+        ),
       );
     }
   }

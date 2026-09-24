@@ -20,40 +20,74 @@ class _FlasheScreenState extends State<FlasheScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF2874F0),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: const [
-            Icon(
-              Icons.shopping_bag_outlined,
-              size: 80,
-              color: Colors.white,
-            ),
-            SizedBox(height: 16),
-            Text(
-              'E-Commerce',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 32,
-                fontWeight: FontWeight.bold,
-                fontStyle: FontStyle.italic,
+      body: Consumer<AthenDiction>(
+        builder: (context, authProvider, child) {
+          if (authProvider.errorMessage.isNotEmpty) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.cloud_off_outlined,
+                      size: 64,
+                      color: Colors.white,
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      authProvider.errorMessage,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                    const SizedBox(height: 20),
+                    FilledButton.icon(
+                      onPressed: lodFlasheScreen,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Retry'),
+                    ),
+                  ],
+                ),
               ),
+            );
+          }
+          return const Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.shopping_bag_outlined,
+                  size: 80,
+                  color: Colors.white,
+                ),
+                SizedBox(height: 16),
+                Text(
+                  'E-Commerce',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+                SizedBox(height: 48),
+                CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFB641B)),
+                ),
+              ],
             ),
-            SizedBox(height: 48),
-            CircularProgressIndicator(
-              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFB641B)),
-            ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
 
   Future<void> lodFlasheScreen() async {
+    final authProvider = context.read<AthenDiction>();
+    authProvider.clearError();
     await Future.delayed(const Duration(seconds: 3));
     if (!mounted) return;
-    
-    // Checks if user is logged in, and navigates appropriately
-    context.read<AthenDiction>().checkUserisLogin(context);
+
+    await authProvider.checkUserisLogin(context);
   }
 }

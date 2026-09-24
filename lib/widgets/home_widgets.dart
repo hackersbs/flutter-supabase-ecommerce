@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:e_comerce_appliction/utils/currency.dart';
+import 'package:e_comerce_appliction/utils/product_pricing.dart';
 import 'package:e_comerce_appliction/provider/cardeprovider.dart';
 import 'package:e_comerce_appliction/provider/productprovider.dart';
 import 'package:e_comerce_appliction/data/catalog.dart';
@@ -11,11 +13,15 @@ import 'package:provider/provider.dart';
 class SearchBarWidget extends StatelessWidget {
   final TextEditingController controller;
   final ValueChanged<String> onChanged;
+  final bool isListening;
+  final VoidCallback onMicPressed;
 
   const SearchBarWidget({
     super.key,
     required this.controller,
     required this.onChanged,
+    required this.isListening,
+    required this.onMicPressed,
   });
 
   @override
@@ -46,9 +52,15 @@ class SearchBarWidget extends StatelessWidget {
                 ),
               ),
             ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: const Icon(Icons.mic, color: Color(0xFF2874F0)),
+            GestureDetector(
+              onTap: onMicPressed,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Icon(
+                  isListening ? Icons.mic : Icons.mic_none,
+                  color: isListening ? Colors.green : const Color(0xFF2874F0),
+                ),
+              ),
             ),
           ],
         ),
@@ -220,26 +232,15 @@ class FlipkartCardWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Determine the active price (discounted vs original)
-    final double price = product['price'] != null
-        ? (product['price'] is double
-              ? product['price']
-              : double.tryParse(product['price'].toString()) ?? 0.0)
-        : 0.0;
-    final double? discountPrice = product['discount_price'] != null
-        ? (product['discount_price'] is double
-              ? product['discount_price']
-              : double.tryParse(product['discount_price'].toString()))
-        : null;
+    final price = productPrice(product, 'price');
     final imageUrl = product['img_url']?.toString();
 
-    final hasDiscount = discountPrice != null && discountPrice > 0;
-    final displayPrice = hasDiscount ? discountPrice : price;
+    final hasDiscount = hasProductDiscount(product);
+    final displayPrice = activeProductPrice(product);
 
     // Calculate off percentage
     int percentageOff = 0;
-    if (hasDiscount && price > 0) {
-      percentageOff = (((price - discountPrice) / price) * 100).round();
-    }
+    if (hasDiscount) percentageOff = productDiscountPercentage(product);
 
     return Card(
       elevation: 2,
@@ -271,27 +272,11 @@ class FlipkartCardWidget extends StatelessWidget {
                         topRight: Radius.circular(10),
                       ),
                     ),
-                    child: isValidImageUrl(imageUrl)
-                        ? ClipRRect(
-                            borderRadius: const BorderRadius.only(
-                              topLeft: Radius.circular(10),
-                              topRight: Radius.circular(10),
-                            ),
-                            child: Image.network(
-                              imageUrl!,
-                              fit: BoxFit.cover,
-                              errorBuilder: (context, error, stackTrace) =>
-                                  const Icon(
-                                    Icons.broken_image_outlined,
-                                    color: Colors.grey,
-                                  ),
-                            ),
-                          )
-                        : const Icon(
-                            Icons.image_not_supported,
-                            color: Colors.grey,
-                            size: 40,
-                          ),
+                    child: ProductImage(
+                      imageUrl: imageUrl,
+                      width: double.infinity,
+                      height: double.infinity,
+                    ),
                   ),
                   Positioned(
                     top: 4,
@@ -348,7 +333,7 @@ class FlipkartCardWidget extends StatelessWidget {
                     runSpacing: 2,
                     children: [
                       Text(
-                        '₹${displayPrice.toStringAsFixed(2)}',
+                        formatIndianRupees(displayPrice),
                         style: const TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 14,
@@ -356,7 +341,7 @@ class FlipkartCardWidget extends StatelessWidget {
                       ),
                       if (hasDiscount) ...[
                         Text(
-                          '₹${price.toStringAsFixed(2)}',
+                          formatIndianRupees(price),
                           style: const TextStyle(
                             decoration: TextDecoration.lineThrough,
                             color: Colors.grey,

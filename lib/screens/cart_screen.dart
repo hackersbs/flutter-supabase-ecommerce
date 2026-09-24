@@ -2,7 +2,10 @@ import 'package:e_comerce_appliction/provider/cardeprovider.dart';
 import 'package:e_comerce_appliction/screens/product_checkout_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:e_comerce_appliction/utils/currency.dart';
+import 'package:e_comerce_appliction/utils/product_pricing.dart';
 import 'package:e_comerce_appliction/widgets/image_url.dart';
+import 'package:e_comerce_appliction/widgets/error_state.dart';
 
 class CartScreen extends StatefulWidget {
   const CartScreen({super.key});
@@ -12,23 +15,38 @@ class CartScreen extends StatefulWidget {
 }
 
 class _CartScreenState extends State<CartScreen> {
-  double _priceFor(Map<String, dynamic> product) {
-    final price = product['price'];
-    final discountPrice = product['discount_price'];
-    final originalPrice = price is num
-        ? price.toDouble()
-        : double.tryParse('$price') ?? 0;
-    final salePrice = discountPrice is num
-        ? discountPrice.toDouble()
-        : double.tryParse('$discountPrice') ?? 0;
-    return salePrice > 0 ? salePrice : originalPrice;
-  }
+  String? _shownError;
+  late final CardeProvider _cartProvider;
 
   @override
   void initState() {
     super.initState();
+    _cartProvider = context.read<CardeProvider>();
+    _cartProvider.addListener(_showProviderError);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<CardeProvider>().loadCart();
+      _cartProvider.loadCart();
+    });
+  }
+
+  @override
+  void dispose() {
+    _cartProvider.removeListener(_showProviderError);
+    super.dispose();
+  }
+
+  void _showProviderError() {
+    final message = _cartProvider.errorMessage;
+    if (message == null) {
+      _shownError = null;
+      return;
+    }
+    if (!mounted || message == _shownError) return;
+    _shownError = message;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(message)));
+      }
     });
   }
 
@@ -43,6 +61,12 @@ class _CartScreenState extends State<CartScreen> {
       ),
       body: Consumer<CardeProvider>(
         builder: (context, cart, child) {
+          if (cart.errorMessage != null && cart.cartItems.isEmpty) {
+            return ErrorState(
+              message: cart.errorMessage!,
+              onRetry: cart.loadCart,
+            );
+          }
           if (cart.cartItems.isEmpty) {
             return const Center(
               child: Column(
@@ -77,6 +101,9 @@ class _CartScreenState extends State<CartScreen> {
                     final product = cart.cartItems[index];
                     final imageUrl = product['img_url']?.toString() ?? '';
                     final quantity = product['quantity'] as int;
+                    final availableStock =
+                        (product['available_stock'] as num?)?.toInt() ??
+                        quantity;
                     return Card(
                       margin: EdgeInsets.zero,
                       elevation: 1,
@@ -84,7 +111,11 @@ class _CartScreenState extends State<CartScreen> {
                         padding: const EdgeInsets.all(10),
                         child: Row(
                           children: [
-                            _CartProductImage(imageUrl: imageUrl),
+                            ProductImage(
+                              imageUrl: imageUrl,
+                              width: 92,
+                              height: 104,
+                            ),
                             const SizedBox(width: 12),
                             Expanded(
                               child: Column(
@@ -101,7 +132,9 @@ class _CartScreenState extends State<CartScreen> {
                                   ),
                                   const SizedBox(height: 6),
                                   Text(
-                                    '₹${_priceFor(product).toStringAsFixed(2)}',
+                                    formatIndianRupees(
+                                      activeProductPrice(product),
+                                    ),
                                     style: const TextStyle(
                                       color: Color(0xFF2874F0),
                                       fontWeight: FontWeight.bold,
@@ -129,8 +162,10 @@ class _CartScreenState extends State<CartScreen> {
                                       ),
                                       _QuantityButton(
                                         icon: Icons.add,
-                                        onPressed: () =>
-                                            cart.increaseQuantity(index),
+                                        onPressed: quantity >= availableStock
+                                            ? null
+                                            : () =>
+                                                  cart.increaseQuantity(index),
                                       ),
                                       const Spacer(),
                                       IconButton(
@@ -166,7 +201,7 @@ class _CartScreenState extends State<CartScreen> {
                         children: [
                           Text('${cart.totalItems} items'),
                           Text(
-                            '₹${cart.totalPrice.toStringAsFixed(2)}',
+                            formatIndianRupees(cart.totalPrice),
                             style: const TextStyle(
                               fontSize: 20,
                               fontWeight: FontWeight.bold,
@@ -222,38 +257,9 @@ class _CartScreenState extends State<CartScreen> {
   }
 }
 
-class _CartProductImage extends StatelessWidget {
-  final String imageUrl;
-
-  const _CartProductImage({required this.imageUrl});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 92,
-      height: 104,
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: !isValidImageUrl(imageUrl)
-          ? const Icon(Icons.image_not_supported, color: Colors.grey)
-          : ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image.network(
-                imageUrl,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) =>
-                    const Icon(Icons.broken_image_outlined, color: Colors.grey),
-              ),
-            ),
-    );
-  }
-}
-
 class _QuantityButton extends StatelessWidget {
   final IconData icon;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
 
   const _QuantityButton({required this.icon, required this.onPressed});
 
@@ -269,7 +275,11 @@ class _QuantityButton extends StatelessWidget {
           border: Border.all(color: Colors.grey.shade400),
           borderRadius: BorderRadius.circular(5),
         ),
-        child: Icon(icon, size: 18),
+        child: Icon(
+          icon,
+          size: 18,
+          color: onPressed == null ? Colors.grey : null,
+        ),
       ),
     );
   }

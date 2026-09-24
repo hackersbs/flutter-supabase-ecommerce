@@ -55,6 +55,23 @@ const catalogCategories = <CatalogCategory>[
   ),
 ];
 
+const productCategoryNames = <String>[
+  'Food',
+  'Electronics',
+  'Laptop',
+  'Phone',
+  'Fashion',
+  'Home Appliances',
+  'Fan',
+  'Fridge',
+  'Beauty',
+  'Grocery',
+  'Books',
+  'Toys',
+  'Furniture',
+  'Sports',
+];
+
 const _searchAliases = <String, List<String>>{
   'laptop': [
     'laptop',

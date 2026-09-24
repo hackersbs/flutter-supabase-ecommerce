@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:e_comerce_appliction/utils/error_handling.dart';
 
 class ReviewProvider extends ChangeNotifier {
   final SupabaseClient supabase = Supabase.instance.client;
@@ -59,7 +60,7 @@ class ReviewProvider extends ChangeNotifier {
     } catch (error) {
       reviews = [];
       myReview = null;
-      errorMessage = error.toString();
+      errorMessage = providerErrorMessage(error);
       debugPrint('Error loading product reviews: $error');
     } finally {
       isLoading = false;
@@ -91,7 +92,7 @@ class ReviewProvider extends ChangeNotifier {
       await loadReviews(productId);
       return true;
     } catch (error) {
-      errorMessage = error.toString();
+      errorMessage = providerErrorMessage(error);
       debugPrint('Error saving product review: $error');
       return false;
     } finally {

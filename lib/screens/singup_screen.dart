@@ -12,6 +12,7 @@ class SingupScreen extends StatefulWidget {
 
 class _SingupScreenState extends State<SingupScreen> {
   String _selectedRole = 'Buyer';
+  bool _isSubmitting = false;
 
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _emailController = TextEditingController();
@@ -245,56 +246,99 @@ class _SingupScreenState extends State<SingupScreen> {
                             width: double.infinity,
                             height: 56,
                             child: FilledButton(
-                              onPressed: () {
-                                final password = _passwordController.text;
-                                final confirmPassword =
-                                    _confirmPasswordController.text;
+                              onPressed: _isSubmitting
+                                  ? null
+                                  : () async {
+                                      final password = _passwordController.text;
+                                      final confirmPassword =
+                                          _confirmPasswordController.text;
 
-                                if (password.length < 6) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text(
-                                        'Password must be at least 6 characters.',
-                                      ),
-                                    ),
-                                  );
-                                  return;
-                                }
+                                      if (_emailController.text.trim().isEmpty || password.isEmpty || _nameController.text.trim().isEmpty) {
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                              const SnackBar(
+                                                content: Text(
+                                                  'Please fill all required fields.',
+                                                ),
+                                              ),
+                                            );
+                                        return;
+                                      }
 
-                                if (password != confirmPassword) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text('Passwords do not match.'),
-                                    ),
-                                  );
-                                  return;
-                                }
+                                      if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(_emailController.text.trim())) {
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                              const SnackBar(
+                                                content: Text(
+                                                  'Please enter a valid email address.',
+                                                ),
+                                              ),
+                                            );
+                                        return;
+                                      }
 
-                                context.read<AthenDiction>().signUp(
-                                  context,
-                                  _emailController.text,
-                                  password,
-                                  _nameController.text,
-                                  _phoneController.text,
-                                  _addressController.text,
-                                  _countryController.text,
-                                  _stateController.text,
-                                  _cityController.text,
-                                  _selectedRole,
-                                );
-                              },
+                                      if (password.length < 6) {
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                              const SnackBar(
+                                                content: Text(
+                                                  'Password must be at least 6 characters.',
+                                                ),
+                                              ),
+                                            );
+                                        return;
+                                      }
+
+                                      if (password != confirmPassword) {
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                              const SnackBar(
+                                                content: Text(
+                                                  'Passwords do not match.',
+                                                ),
+                                              ),
+                                            );
+                                        return;
+                                      }
+
+                                      setState(() => _isSubmitting = true);
+                                      await context.read<AthenDiction>().signUp(
+                                        context,
+                                        _emailController.text,
+                                        password,
+                                        _nameController.text,
+                                        _phoneController.text,
+                                        _addressController.text,
+                                        _countryController.text,
+                                        _stateController.text,
+                                        _cityController.text,
+                                        _selectedRole,
+                                      );
+                                      if (mounted) {
+                                        setState(() => _isSubmitting = false);
+                                      }
+                                    },
                               style: FilledButton.styleFrom(
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(16),
                                 ),
                               ),
-                              child: const Text(
-                                'Continue',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
+                              child: _isSubmitting
+                                  ? const SizedBox(
+                                      width: 22,
+                                      height: 22,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : const Text(
+                                      'Continue',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
                             ),
                           ).animate().fade(delay: 800.ms).slideY(begin: 0.1),
                           const SizedBox(height: 32),

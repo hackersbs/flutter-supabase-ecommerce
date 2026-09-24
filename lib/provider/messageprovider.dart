@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:e_comerce_appliction/utils/error_handling.dart';
 
 class MessageContact {
   final String userId;
@@ -29,6 +30,16 @@ class MessageProvider extends ChangeNotifier {
 
   String? get currentUserId => supabase.auth.currentUser?.id;
 
+  bool _messageWindowOpen(Map<String, dynamic> order) {
+    if (order['status']?.toString() != 'delivered') return true;
+    final deliveredAt = DateTime.tryParse(
+      order['updated_at']?.toString() ?? order['created_at']?.toString() ?? '',
+    );
+    if (deliveredAt == null) return false;
+    return DateTime.now().toUtc().difference(deliveredAt.toUtc()) <
+        const Duration(days: 7);
+  }
+
   Future<void> loadContacts() async {
     final userId = currentUserId;
     if (userId == null) return;
@@ -43,42 +54,86 @@ class MessageProvider extends ChangeNotifier {
       if (role == 'Seller') {
         final response = await supabase
             .from('order_items')
-            .select(
-              'order_id, product_id, orders!inner(user_id, customer_name)',
-            )
+            .select('order_id, product_id')
             .eq('seller_id', userId);
+        final orderIds = response
+            .map((row) => row['order_id']?.toString())
+            .whereType<String>()
+            .toSet()
+            .toList();
+        final orders = orderIds.isEmpty
+            ? <dynamic>[]
+            : await supabase
+                  .from('orders')
+                  .select(
+                    'id, user_id, customer_name, status, created_at, updated_at',
+                  )
+                  .inFilter('id', orderIds);
+        final ordersById = <String, Map<String, dynamic>>{
+          for (final order in orders)
+            order['id'].toString(): Map<String, dynamic>.from(order),
+        };
         for (final row in response) {
-          final order = Map<String, dynamic>.from(row['orders'] ?? {});
+          final order = ordersById[row['order_id']?.toString()] ?? {};
+          if (!_messageWindowOpen(order)) continue;
           final buyerId = order['user_id']?.toString();
           if (buyerId != null) {
-            contactData.putIfAbsent(
-              buyerId,
-              () => {
+            final existing = contactData[buyerId];
+            final orderDate = DateTime.tryParse(
+              order['updated_at']?.toString() ??
+                  order['created_at']?.toString() ??
+                  '',
+            );
+            final existingDate = DateTime.tryParse(
+              existing?['orderDate']?.toString() ?? '',
+            );
+            if (existing == null ||
+                (orderDate != null &&
+                    (existingDate == null ||
+                        orderDate.isAfter(existingDate)))) {
+              contactData[buyerId] = {
                 'name': order['customer_name']?.toString() ?? 'Buyer',
                 'orderId': row['order_id']?.toString(),
                 'productId': row['product_id']?.toString(),
-              },
-            );
+                'orderDate': orderDate?.toIso8601String(),
+              };
+            }
           }
         }
       } else {
         final response = await supabase
             .from('orders')
-            .select('id, order_items(seller_id, product_id)')
+            .select(
+              'id, user_id, status, created_at, updated_at, order_items(seller_id, product_id)',
+            )
             .eq('user_id', userId);
         for (final row in response) {
+          final order = Map<String, dynamic>.from(row);
+          if (!_messageWindowOpen(order)) continue;
           final items = (row['order_items'] as List?) ?? const [];
           for (final item in items) {
             final sellerId = item['seller_id']?.toString();
             if (sellerId != null) {
-              contactData.putIfAbsent(
-                sellerId,
-                () => {
+              final orderDate = DateTime.tryParse(
+                order['updated_at']?.toString() ??
+                    order['created_at']?.toString() ??
+                    '',
+              );
+              final existing = contactData[sellerId];
+              final existingDate = DateTime.tryParse(
+                existing?['orderDate']?.toString() ?? '',
+              );
+              if (existing == null ||
+                  (orderDate != null &&
+                      (existingDate == null ||
+                          orderDate.isAfter(existingDate)))) {
+                contactData[sellerId] = {
                   'name': 'Seller',
                   'orderId': row['id']?.toString(),
                   'productId': item['product_id']?.toString(),
-                },
-              );
+                  'orderDate': orderDate?.toIso8601String(),
+                };
+              }
             }
           }
         }
@@ -114,7 +169,7 @@ class MessageProvider extends ChangeNotifier {
       _sortContacts();
       _subscribeToMessages(userId);
     } catch (error) {
-      errorMessage = error.toString();
+      errorMessage = providerErrorMessage(error);
       debugPrint('Error loading message contacts: $error');
     } finally {
       isLoading = false;
@@ -167,8 +222,13 @@ class MessageProvider extends ChangeNotifier {
                 ? message['receiver_id']?.toString()
                 : message['sender_id']?.toString();
             if (otherUser == null) return;
-            _messagesByUser[otherUser] = [message];
+            final contactIndex = contacts.indexWhere(
+              (contact) => contact.userId == otherUser,
+            );
+            if (contactIndex == -1) return;
+            _appendMessage(otherUser, message);
             _applyRecentMessages();
+            _sortContacts();
             notifyListeners();
           },
         )
@@ -180,23 +240,30 @@ class MessageProvider extends ChangeNotifier {
   ) async {
     final userId = currentUserId;
     if (userId == null) return [];
-    final response = await supabase
-        .from('messages')
-        .select()
-        .or('sender_id.eq.$userId,receiver_id.eq.$userId')
-        .order('created_at');
-    final messages = response
-        .map(Map<String, dynamic>.from)
-        .where(
-          (message) =>
-              (message['sender_id'] == userId &&
-                  message['receiver_id'] == otherUserId) ||
-              (message['sender_id'] == otherUserId &&
-                  message['receiver_id'] == userId),
-        )
-        .toList();
-    _messagesByUser[otherUserId] = messages.isEmpty ? [] : [messages.last];
-    return messages;
+    try {
+      final response = await supabase
+          .from('messages')
+          .select()
+          .or('sender_id.eq.$userId,receiver_id.eq.$userId')
+          .order('created_at');
+      final messages = response
+          .map(Map<String, dynamic>.from)
+          .where(
+            (message) =>
+                (message['sender_id'] == userId &&
+                    message['receiver_id'] == otherUserId) ||
+                (message['sender_id'] == otherUserId &&
+                    message['receiver_id'] == userId),
+          )
+          .toList();
+      _messagesByUser[otherUserId] = messages;
+      notifyListeners();
+      return messages;
+    } catch (error) {
+      errorMessage = providerErrorMessage(error);
+      notifyListeners();
+      return [];
+    }
   }
 
   Future<bool> sendMessage({
@@ -207,16 +274,24 @@ class MessageProvider extends ChangeNotifier {
     final text = body.trim();
     if (userId == null || text.isEmpty) return false;
     try {
-      await supabase.from('messages').insert({
-        'sender_id': userId,
-        'receiver_id': contact.userId,
-        'order_id': contact.orderId,
-        'product_id': contact.productId,
-        'body': text,
-      });
+      final inserted = await supabase
+          .from('messages')
+          .insert({
+            'sender_id': userId,
+            'receiver_id': contact.userId,
+            'order_id': contact.orderId,
+            'product_id': contact.productId,
+            'body': text,
+          })
+          .select()
+          .single();
+      _appendMessage(contact.userId, Map<String, dynamic>.from(inserted));
+      _applyRecentMessages();
+      _sortContacts();
+      notifyListeners();
       return true;
     } catch (error) {
-      errorMessage = error.toString();
+      errorMessage = providerErrorMessage(error);
       notifyListeners();
       return false;
     }
@@ -224,13 +299,38 @@ class MessageProvider extends ChangeNotifier {
 
   void _applyRecentMessages() {
     for (final contact in contacts) {
-      final recent = _messagesByUser[contact.userId]?.firstOrNull;
+      final recent = _messagesByUser[contact.userId]?.lastOrNull;
       if (recent == null) continue;
       contact.lastMessage = recent['body']?.toString() ?? '';
       contact.lastMessageAt = DateTime.tryParse(
         recent['created_at']?.toString() ?? '',
       );
     }
+  }
+
+  void _appendMessage(String userId, Map<String, dynamic> message) {
+    final messages = _messagesByUser.putIfAbsent(userId, () => []);
+    final messageId = message['id']?.toString();
+    final alreadyAdded =
+        messageId != null &&
+        messages.any((item) => item['id']?.toString() == messageId);
+    if (alreadyAdded) return;
+    messages.add(message);
+    messages.sort((first, second) {
+      final firstDate =
+          DateTime.tryParse(first['created_at']?.toString() ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      final secondDate =
+          DateTime.tryParse(second['created_at']?.toString() ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      return firstDate.compareTo(secondDate);
+    });
+  }
+
+  List<Map<String, dynamic>> conversationFor(String userId) {
+    return List<Map<String, dynamic>>.unmodifiable(
+      _messagesByUser[userId] ?? const [],
+    );
   }
 
   void _sortContacts() {

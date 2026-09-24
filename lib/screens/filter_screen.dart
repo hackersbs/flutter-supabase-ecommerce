@@ -1,7 +1,13 @@
+import 'dart:math' as math;
+
 import 'package:e_comerce_appliction/provider/productprovider.dart';
+import 'package:e_comerce_appliction/data/catalog.dart';
 import 'package:e_comerce_appliction/widgets/home_widgets.dart';
 import 'package:flutter/material.dart';
+import 'package:e_comerce_appliction/utils/currency.dart';
+import 'package:e_comerce_appliction/utils/product_pricing.dart';
 import 'package:provider/provider.dart';
+import 'package:e_comerce_appliction/widgets/error_state.dart';
 
 class FilterScreen extends StatefulWidget {
   const FilterScreen({super.key});
@@ -11,26 +17,9 @@ class FilterScreen extends StatefulWidget {
 }
 
 class _FilterScreenState extends State<FilterScreen> {
-  static const _defaultCategories = [
-    'All',
-    'Food',
-    'Electronics',
-    'Laptop',
-    'Phone',
-    'Fashion',
-    'Home Appliances',
-    'Fan',
-    'Fridge',
-    'Beauty',
-    'Grocery',
-    'Books',
-    'Toys',
-    'Furniture',
-    'Sports',
-  ];
-
   double _minimumPrice = 0;
   double _maximumPrice = 100000;
+  double _priceLimit = 100000;
   String _selectedCategory = 'All';
   String _selectedOffer = 'All offers';
   String _selectedSort = 'Relevance';
@@ -46,22 +35,11 @@ class _FilterScreenState extends State<FilterScreen> {
     });
   }
 
-  static double _readPrice(Map<String, dynamic> product, String key) {
-    final value = product[key];
-    return value is num ? value.toDouble() : double.tryParse('$value') ?? 0;
-  }
-
-  static int _discountPercentage(Map<String, dynamic> product) {
-    final price = _readPrice(product, 'price');
-    final discountPrice = _readPrice(product, 'discount_price');
-    if (price <= 0 || discountPrice <= 0 || discountPrice >= price) return 0;
-    return ((price - discountPrice) / price * 100).round();
-  }
-
   void _resetFilters() {
     setState(() {
       _minimumPrice = 0;
       _maximumPrice = 100000;
+      _priceLimit = 100000;
       _selectedCategory = 'All';
       _selectedOffer = 'All offers';
       _selectedSort = 'Relevance';
@@ -85,20 +63,44 @@ class _FilterScreenState extends State<FilterScreen> {
       ),
       body: Consumer<Productprovider>(
         builder: (context, provider, child) {
-          final categories = <String>{..._defaultCategories};
+          if (!provider.isLoading &&
+              provider.errorMessage != null &&
+              provider.products.isEmpty) {
+            return ErrorState(
+              message: provider.errorMessage!,
+              onRetry: provider.getProduct,
+            );
+          }
+          final categories = <String>{'All', ...productCategoryNames};
           for (final product in provider.products) {
             final category = (product['category'] ?? 'General')
                 .toString()
                 .trim();
             if (category.isNotEmpty) categories.add(category);
           }
+          final highestProductPrice = provider.products.fold<double>(
+            0,
+            (highest, product) =>
+                math.max(highest, activeProductPrice(product)),
+          );
+          final priceLimit = math
+              .max(100000, (highestProductPrice / 10000).ceil() * 10000)
+              .toDouble();
+          if (priceLimit != _priceLimit) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              setState(() {
+                final wasAtPreviousLimit = _maximumPrice == _priceLimit;
+                _priceLimit = priceLimit;
+                if (wasAtPreviousLimit) _maximumPrice = priceLimit;
+              });
+            });
+          }
 
           final filteredProducts = provider.products.where((product) {
-            final originalPrice = _readPrice(product, 'price');
-            final salePrice = _readPrice(product, 'discount_price');
-            final activePrice = salePrice > 0 ? salePrice : originalPrice;
+            final activePrice = activeProductPrice(product);
             final category = (product['category'] ?? 'General').toString();
-            final hasOffer = salePrice > 0 && salePrice < originalPrice;
+            final hasOffer = hasProductDiscount(product);
 
             final matchesPrice =
                 activePrice >= _minimumPrice && activePrice <= _maximumPrice;
@@ -114,23 +116,21 @@ class _FilterScreenState extends State<FilterScreen> {
 
           if (_selectedSort == 'Price: Low to High') {
             filteredProducts.sort(
-              (first, second) => _readPrice(
-                first,
-                'price',
-              ).compareTo(_readPrice(second, 'price')),
+              (first, second) =>
+                  activeProductPrice(first)
+                      .compareTo(activeProductPrice(second)),
             );
           } else if (_selectedSort == 'Price: High to Low') {
             filteredProducts.sort(
-              (first, second) => _readPrice(
-                second,
-                'price',
-              ).compareTo(_readPrice(first, 'price')),
+              (first, second) =>
+                  activeProductPrice(second)
+                      .compareTo(activeProductPrice(first)),
             );
           } else if (_selectedSort == 'Biggest Discount') {
             filteredProducts.sort(
               (first, second) =>
-                  _discountPercentage(second)
-                      .compareTo(_discountPercentage(first)),
+                  productDiscountPercentage(second)
+                      .compareTo(productDiscountPercentage(first)),
             );
           } else if (_selectedSort == 'Name') {
             filteredProducts.sort(
@@ -146,6 +146,7 @@ class _FilterScreenState extends State<FilterScreen> {
                 child: _FilterPanel(
                   minimumPrice: _minimumPrice,
                   maximumPrice: _maximumPrice,
+                  priceLimit: priceLimit,
                   selectedCategory: _selectedCategory,
                   selectedOffer: _selectedOffer,
                   selectedSort: _selectedSort,
@@ -222,6 +223,7 @@ class _FilterScreenState extends State<FilterScreen> {
 class _FilterPanel extends StatelessWidget {
   final double minimumPrice;
   final double maximumPrice;
+  final double priceLimit;
   final String selectedCategory;
   final String selectedOffer;
   final String selectedSort;
@@ -234,6 +236,7 @@ class _FilterPanel extends StatelessWidget {
   const _FilterPanel({
     required this.minimumPrice,
     required this.maximumPrice,
+    required this.priceLimit,
     required this.selectedCategory,
     required this.selectedOffer,
     required this.selectedSort,
@@ -258,20 +261,20 @@ class _FilterPanel extends StatelessWidget {
           ),
           RangeSlider(
             min: 0,
-            max: 100000,
-            divisions: 100,
+            max: priceLimit,
+            divisions: priceLimit ~/ 1000,
             values: RangeValues(minimumPrice, maximumPrice),
             labels: RangeLabels(
-              '₹${minimumPrice.round()}',
-              '₹${maximumPrice.round()}',
+              formatIndianRupees(minimumPrice, decimals: false),
+              formatIndianRupees(maximumPrice, decimals: false),
             ),
             onChanged: onPriceChanged,
           ),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('₹${minimumPrice.round()}'),
-              Text('₹${maximumPrice.round()}'),
+              Text(formatIndianRupees(minimumPrice, decimals: false)),
+              Text(formatIndianRupees(maximumPrice, decimals: false)),
             ],
           ),
           const SizedBox(height: 10),

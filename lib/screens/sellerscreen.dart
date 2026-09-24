@@ -1,15 +1,21 @@
+import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:e_comerce_appliction/provider/authprovider.dart';
 import 'package:e_comerce_appliction/provider/orderditiyalce.dart';
 import 'package:e_comerce_appliction/provider/productprovider.dart';
+import 'package:e_comerce_appliction/provider/messageprovider.dart';
 import 'package:flutter/material.dart';
 import 'package:file_selector/file_selector.dart';
+import 'package:image_picker/image_picker.dart' as image_picker;
 import 'package:provider/provider.dart';
-import 'package:e_comerce_appliction/widgets/image_url.dart';
 import 'package:e_comerce_appliction/screens/message_screen.dart';
 import 'package:e_comerce_appliction/screens/account_screen.dart';
 import 'package:e_comerce_appliction/data/catalog.dart';
+import 'package:e_comerce_appliction/utils/currency.dart';
+import 'package:e_comerce_appliction/utils/date_format.dart';
+import 'package:e_comerce_appliction/widgets/seller_widgets.dart';
 
 class SellerScreen extends StatefulWidget {
   const SellerScreen({super.key});
@@ -23,28 +29,25 @@ class _SellerScreenState extends State<SellerScreen> {
   String _selectedCountry = 'All';
   String _selectedState = 'All';
   String _selectedCity = 'All';
-
-  String _placedDateTime(BuildContext context, dynamic value) {
-    final parsed = DateTime.tryParse(value?.toString() ?? '');
-    if (parsed == null) return 'Order time unavailable';
-    final local = parsed.toLocal();
-    final date = MaterialLocalizations.of(context).formatMediumDate(local);
-    final time = MaterialLocalizations.of(context)
-        .formatTimeOfDay(TimeOfDay.fromDateTime(local));
-    return '$date at $time';
-  }
+  String _searchQuery = '';
+  String _orderSearchQuery = '';
+  String _orderStatusFilter = 'All';
+  String _returnSearchQuery = '';
+  String _returnStatusFilter = 'All';
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<Productprovider>().getProduct();
+      context.read<Productprovider>().getSellerProducts();
       context.read<OrderDitiyalce>().loadSellerDashboard();
     });
   }
 
   void _showProductDialog({Map<String, dynamic>? product}) {
-    final nameController = TextEditingController(text: product?['name'] ?? '');
+    final nameController = TextEditingController(
+      text: product?['name']?.toString() ?? '',
+    );
     final priceController = TextEditingController(
       text: product?['price']?.toString() ?? '',
     );
@@ -52,39 +55,41 @@ class _SellerScreenState extends State<SellerScreen> {
       text: product?['discount_price']?.toString() ?? '',
     );
     final descriptionController = TextEditingController(
-      text: product?['description'] ?? '',
+      text: product?['description']?.toString() ?? '',
     );
     final categoryController = TextEditingController(
-      text: product?['category'] ?? '',
+      text: product?['category']?.toString() ?? '',
     );
     var selectedCategory = product?['category']?.toString();
     final subcategoryController = TextEditingController(
-      text: product?['subcategory'] ?? '',
+      text: product?['subcategory']?.toString() ?? '',
     );
     final quantityController = TextEditingController(
       text: product?['quantity']?.toString() ?? '',
     );
     final imgUrlController = TextEditingController(
-      text: product?['img_url'] ?? '',
+      text: product?['img_url']?.toString() ?? '',
     );
     XFile? selectedImage;
     Uint8List? selectedImageBytes;
     var isUploadingImage = false;
+    var isPickingImage = false;
 
     showDialog(
       context: context,
       builder: (context) {
+        final screenSize = MediaQuery.sizeOf(context);
+        final dialogWidth = math.min(500.0, screenSize.width - 48);
+        final dialogHeight = math.min(620.0, screenSize.height * 0.62);
         return AlertDialog(
           insetPadding: const EdgeInsets.symmetric(
             horizontal: 16,
             vertical: 24,
           ),
           title: Text(product == null ? 'Add Product' : 'Edit Product'),
-          content: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: 500,
-              maxHeight: MediaQuery.sizeOf(context).height * 0.62,
-            ),
+          content: SizedBox(
+            width: dialogWidth,
+            height: dialogHeight,
             child: StatefulBuilder(
               builder: (context, setDialogState) {
                 return SingleChildScrollView(
@@ -112,9 +117,7 @@ class _SellerScreenState extends State<SellerScreen> {
                       StatefulBuilder(
                         builder: (context, setDialogState) {
                           final category =
-                              catalogCategories.any(
-                                (item) => item.name == selectedCategory,
-                              )
+                              productCategoryNames.contains(selectedCategory)
                               ? selectedCategory
                               : null;
                           return Column(
@@ -124,11 +127,11 @@ class _SellerScreenState extends State<SellerScreen> {
                                 decoration: const InputDecoration(
                                   labelText: 'Category',
                                 ),
-                                items: catalogCategories
+                                items: productCategoryNames
                                     .map(
                                       (item) => DropdownMenuItem(
-                                        value: item.name,
-                                        child: Text(item.name),
+                                        value: item,
+                                        child: Text(item),
                                       ),
                                     )
                                     .toList(),
@@ -163,6 +166,12 @@ class _SellerScreenState extends State<SellerScreen> {
                         keyboardType: TextInputType.number,
                         decoration: const InputDecoration(
                           labelText: 'Quantity (Optional)',
+                        ),
+                      ),
+                      TextField(
+                        controller: imgUrlController,
+                        decoration: const InputDecoration(
+                          labelText: 'Image URL (Or upload below)',
                         ),
                       ),
                       if (selectedImage != null ||
@@ -200,23 +209,35 @@ class _SellerScreenState extends State<SellerScreen> {
                       SizedBox(
                         width: double.infinity,
                         child: OutlinedButton.icon(
-                          onPressed: isUploadingImage
+                          onPressed: isUploadingImage || isPickingImage
                               ? null
                               : () async {
+                                  setDialogState(() => isPickingImage = true);
                                   try {
-                                    final picked = await openFile(
-                                      acceptedTypeGroups: [
-                                        const XTypeGroup(
-                                          label: 'Images',
-                                          extensions: [
-                                            'jpg',
-                                            'jpeg',
-                                            'png',
-                                            'webp',
-                                          ],
-                                        ),
-                                      ],
-                                    );
+                                    final XFile? picked;
+                                    if (Platform.isAndroid || Platform.isIOS) {
+                                      picked = await image_picker.ImagePicker()
+                                          .pickImage(
+                                            source: image_picker
+                                                .ImageSource
+                                                .gallery,
+                                            imageQuality: 85,
+                                          );
+                                    } else {
+                                      picked = await openFile(
+                                        acceptedTypeGroups: [
+                                          const XTypeGroup(
+                                            label: 'Images',
+                                            extensions: [
+                                              'jpg',
+                                              'jpeg',
+                                              'png',
+                                              'webp',
+                                            ],
+                                          ),
+                                        ],
+                                      );
+                                    }
                                     if (picked == null) return;
                                     final bytes = await picked.readAsBytes();
                                     if (!context.mounted) return;
@@ -227,17 +248,25 @@ class _SellerScreenState extends State<SellerScreen> {
                                   } catch (error) {
                                     if (!context.mounted) return;
                                     ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
+                                      const SnackBar(
                                         content: Text(
-                                          'Could not select image: $error',
+                                          'The image could not be selected. Please try again.',
                                         ),
                                       ),
                                     );
+                                  } finally {
+                                    if (context.mounted) {
+                                      setDialogState(
+                                        () => isPickingImage = false,
+                                      );
+                                    }
                                   }
                                 },
                           icon: const Icon(Icons.photo_library_outlined),
                           label: Text(
-                            selectedImage == null
+                            isPickingImage
+                                ? 'Opening gallery...'
+                                : selectedImage == null
                                 ? 'Choose Product Image'
                                 : 'Change Image',
                             overflow: TextOverflow.ellipsis,
@@ -275,81 +304,104 @@ class _SellerScreenState extends State<SellerScreen> {
                       final navigator = Navigator.of(context);
                       final messenger = ScaffoldMessenger.of(context);
 
-                      if (name.isNotEmpty && price > 0 && category.isNotEmpty) {
-                        if (selectedImage != null) {
-                          setState(() => isUploadingImage = true);
-                          final uploadedUrl = await productProvider
-                              .uploadProductImage(selectedImage!);
-                          if (uploadedUrl == null) {
-                            setState(() => isUploadingImage = false);
-                            messenger.showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  productProvider.errorMessage ??
-                                      'Image upload failed.',
-                                ),
-                              ),
-                            );
-                            return;
-                          }
-                          imgUrlController.text = uploadedUrl;
-                          setState(() => isUploadingImage = false);
-                        }
-                        final imgUrl = imgUrlController.text.trim().isNotEmpty
-                            ? imgUrlController.text.trim()
-                            : null;
-
-                        if (product == null) {
-                          final inserted = await productProvider.insertProduct(
-                            name: name,
-                            price: price,
-                            discountPrice: discountPrice,
-                            description: description,
-                            quantity: quantity,
-                            imgUrl: imgUrl,
-                            category: category,
-                            subcategory:
-                                subcategoryController.text.trim().isNotEmpty
-                                ? subcategoryController.text.trim()
-                                : category,
-                          );
-                          if (!inserted) {
-                            messenger.showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  productProvider.errorMessage ??
-                                      'Product could not be added.',
-                                ),
-                              ),
-                            );
-                            return;
-                          }
-                        } else {
-                          productProvider.updateProduct(
-                            id: product['id'].toString(),
-                            name: name,
-                            price: price,
-                            discountPrice: discountPrice,
-                            description: description,
-                            quantity: quantity,
-                            imgUrl: imgUrl,
-                            category: category,
-                            subcategory:
-                                subcategoryController.text.trim().isNotEmpty
-                                ? subcategoryController.text.trim()
-                                : category,
-                          );
-                        }
-                        navigator.pop();
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
+                      if (name.isEmpty || price <= 0 || category.isEmpty) {
+                        messenger.showSnackBar(
                           const SnackBar(
                             content: Text(
-                              'Please enter valid name, category and price',
+                              'Name, Category, and a valid Price are required.',
                             ),
                           ),
                         );
+                        return;
                       }
+
+                      final imgUrl = imgUrlController.text.trim().isNotEmpty
+                          ? imgUrlController.text.trim()
+                          : null;
+
+                      if (selectedImage == null && imgUrl == null) {
+                        messenger.showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Either an Image URL or an Uploaded Image is required.',
+                            ),
+                          ),
+                        );
+                        return;
+                      }
+
+                      if (selectedImage != null) {
+                        setState(() => isUploadingImage = true);
+                        final uploadedUrl = await productProvider
+                            .uploadProductImage(selectedImage!);
+                        if (uploadedUrl == null) {
+                          setState(() => isUploadingImage = false);
+                          messenger.showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                productProvider.errorMessage ??
+                                    'Image upload failed. Please try again.',
+                              ),
+                            ),
+                          );
+                          return;
+                        }
+                        imgUrlController.text = uploadedUrl;
+                        setState(() => isUploadingImage = false);
+                      }
+
+                      final finalImgUrl = imgUrlController.text.trim();
+
+                      if (product == null) {
+                        final inserted = await productProvider.insertProduct(
+                          name: name,
+                          price: price,
+                          discountPrice: discountPrice,
+                          description: description,
+                          quantity: quantity,
+                          imgUrl: finalImgUrl,
+                          category: category,
+                          subcategory:
+                              subcategoryController.text.trim().isNotEmpty
+                              ? subcategoryController.text.trim()
+                              : category,
+                        );
+                        if (!inserted) {
+                          messenger.showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                productProvider.errorMessage ??
+                                    'Product could not be added.',
+                              ),
+                            ),
+                          );
+                          return;
+                        }
+                      } else {
+                        await productProvider.updateProduct(
+                          id: product['id'].toString(),
+                          name: name,
+                          price: price,
+                          discountPrice: discountPrice,
+                          description: description,
+                          quantity: quantity,
+                          imgUrl: finalImgUrl,
+                          category: category,
+                          subcategory:
+                              subcategoryController.text.trim().isNotEmpty
+                              ? subcategoryController.text.trim()
+                              : category,
+                        );
+                        if (productProvider.errorMessage != null) {
+                          messenger.showSnackBar(
+                            SnackBar(
+                              content: Text(productProvider.errorMessage!),
+                            ),
+                          );
+                          return;
+                        }
+                      }
+                      navigator.pop();
                     },
               child: const Text('Save'),
             ),
@@ -368,6 +420,7 @@ class _SellerScreenState extends State<SellerScreen> {
           _buildDashboardPage(),
           _buildProductsPage(),
           _buildOrdersPage(),
+          _buildReturnsPage(),
           _buildMessagesPage(),
           const AccountScreen(),
         ],
@@ -393,6 +446,10 @@ class _SellerScreenState extends State<SellerScreen> {
                 context.read<OrderDitiyalce>().loadSellerDashboard();
               } else if (index == 2) {
                 context.read<OrderDitiyalce>().loadSellerOrders();
+              } else if (index == 3) {
+                context.read<OrderDitiyalce>().loadSellerReturns();
+              } else if (index == 4) {
+                context.read<MessageProvider>().loadContacts();
               }
             },
             destinations: const [
@@ -410,6 +467,11 @@ class _SellerScreenState extends State<SellerScreen> {
                 icon: Icon(Icons.local_shipping_outlined),
                 selectedIcon: Icon(Icons.local_shipping),
                 label: 'Orders',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.assignment_return_outlined),
+                selectedIcon: Icon(Icons.assignment_return),
+                label: 'Returns',
               ),
               NavigationDestination(
                 icon: Icon(Icons.message_outlined),
@@ -540,7 +602,7 @@ class _SellerScreenState extends State<SellerScreen> {
                   style: TextStyle(color: Colors.grey),
                 ),
                 const SizedBox(height: 16),
-                _DashboardFilters(
+                SellerDashboardFilters(
                   countries: countries,
                   states: states,
                   cities: cities,
@@ -573,33 +635,35 @@ class _SellerScreenState extends State<SellerScreen> {
                   physics: const NeverScrollableScrollPhysics(),
                   crossAxisSpacing: 12,
                   mainAxisSpacing: 12,
-                  childAspectRatio: 1.55,
+                  childAspectRatio: MediaQuery.sizeOf(context).width < 600
+                      ? 1.2
+                      : 1.55,
                   children: [
-                    _MetricCard(
+                    SellerMetricCard(
                       label: 'Sales items',
                       value: '$soldQuantity',
                       icon: Icons.shopping_bag_outlined,
                       color: Colors.green,
                     ),
-                    _MetricCard(
+                    SellerMetricCard(
                       label: 'Total revenue',
-                      value: '₹${revenue.toStringAsFixed(0)}',
+                      value: formatIndianRupees(revenue, decimals: false),
                       icon: Icons.payments_outlined,
                       color: Colors.indigo,
                     ),
-                    _MetricCard(
+                    SellerMetricCard(
                       label: 'Pending COD money',
-                      value: '₹${pendingMoney.toStringAsFixed(0)}',
+                      value: formatIndianRupees(pendingMoney, decimals: false),
                       icon: Icons.account_balance_wallet_outlined,
                       color: Colors.orange,
                     ),
-                    _MetricCard(
+                    SellerMetricCard(
                       label: 'Products in stock',
                       value: '$stock',
                       icon: Icons.inventory_2_outlined,
                       color: Colors.blueGrey,
                     ),
-                    _MetricCard(
+                    SellerMetricCard(
                       label: 'Customers',
                       value: '$customers',
                       icon: Icons.people_outline,
@@ -608,22 +672,24 @@ class _SellerScreenState extends State<SellerScreen> {
                   ],
                 ),
                 const SizedBox(height: 14),
-                _ChartCard(
+                SellerChartCard(
                   title: 'Delivered COD revenue',
-                  trailing: '₹${revenue.toStringAsFixed(0)}',
-                  child: _RevenueBar(value: revenue),
+                  trailing: formatIndianRupees(revenue, decimals: false),
+                  child: SellerRevenueBar(value: revenue),
                 ),
                 const SizedBox(height: 14),
-                _ChartCard(
+                SellerChartCard(
                   title: 'Top-selling products',
                   child: sortedProducts.isEmpty
                       ? const Text('No sales data for this selection.')
-                      : _ProductBars(entries: sortedProducts.take(5).toList()),
+                      : SellerProductBars(
+                          entries: sortedProducts.take(5).toList(),
+                        ),
                 ),
                 const SizedBox(height: 14),
-                _ChartCard(
+                SellerChartCard(
                   title: 'Order status',
-                  child: _StatusBars(orders: activeOrders),
+                  child: SellerStatusBars(orders: activeOrders),
                 ),
               ],
             ),
@@ -708,124 +774,234 @@ class _SellerScreenState extends State<SellerScreen> {
           if (orderProvider.sellerOrders.isEmpty) {
             return const Center(child: Text('No buyer orders yet.'));
           }
-          return RefreshIndicator(
-            onRefresh: orderProvider.loadSellerOrders,
-            child: ListView.builder(
-              padding: const EdgeInsets.all(12),
-              itemCount: orderProvider.sellerOrders.length,
-              itemBuilder: (context, index) {
-                final item = orderProvider.sellerOrders[index];
-                final order = Map<String, dynamic>.from(item['orders'] ?? {});
-                final status = order['status']?.toString() ?? 'pending';
-                final buyer = order['customer_name']?.toString() ?? 'Buyer';
-                final orderId = order['id']?.toString() ?? '';
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            const Icon(Icons.person_outline),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                buyer,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
+          final search = _orderSearchQuery.trim().toLowerCase();
+          final filteredOrders = orderProvider.sellerOrders.where((item) {
+            final order = Map<String, dynamic>.from(item['orders'] ?? {});
+            final status = order['status']?.toString() ?? 'pending';
+            final buyer =
+                order['customer_name']?.toString().toLowerCase() ?? '';
+            final product =
+                item['product_name']?.toString().toLowerCase() ?? '';
+            final orderId = resolveOrderId(order, item: item).toLowerCase();
+            final matchesStatus =
+                _orderStatusFilter == 'All' || status == _orderStatusFilter;
+            final matchesSearch =
+                search.isEmpty ||
+                buyer.contains(search) ||
+                product.contains(search) ||
+                orderId.contains(search);
+            return matchesStatus && matchesSearch;
+          }).toList();
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        onChanged: (value) =>
+                            setState(() => _orderSearchQuery = value),
+                        decoration: const InputDecoration(
+                          labelText: 'Search buyer, product or order ID',
+                          prefixIcon: Icon(Icons.search),
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 145,
+                      child: DropdownButtonFormField<String>(
+                        initialValue: _orderStatusFilter,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Status',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: _orderStatusOptions
+                            .map(
+                              (value) => DropdownMenuItem(
+                                value: value,
+                                child: Text(
+                                  value,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                               ),
-                            ),
-                            Text(
-                              status,
-                              style: const TextStyle(color: Colors.blue),
-                            ),
-                          ],
-                        ),
-                        const Divider(),
-                        Text(item['product_name']?.toString() ?? 'Product'),
-                        Text('Quantity: ${item['quantity'] ?? 1}'),
-                        Text('Total: ₹${item['item_total'] ?? 0}'),
-                        const Text(
-                          'Payment: Cash on delivery',
-                          style: TextStyle(color: Colors.deepOrange),
-                        ),
-                        Text(
-                          'Placed on ${_placedDateTime(context, order['created_at'])}',
-                          style: const TextStyle(
-                            color: Colors.grey,
-                            fontSize: 12,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        const Text(
-                          'Buyer contact details',
-                          style: TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            const Icon(Icons.phone_outlined, size: 16),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: Text(
-                                order['customer_phone']?.toString() ??
-                                    'Phone not provided',
-                              ),
-                            ),
-                          ],
-                        ),
-                        Row(
-                          children: [
-                            const Icon(Icons.email_outlined, size: 16),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: Text(
-                                order['customer_email']?.toString() ??
-                                    'Email not provided',
-                              ),
-                            ),
-                          ],
-                        ),
-                        Text(
-                          '${order['address'] ?? ''}, ${order['city'] ?? ''}, ${order['state'] ?? ''}, ${order['country'] ?? ''}',
-                          style: const TextStyle(color: Colors.grey),
-                        ),
-                        const SizedBox(height: 10),
-                        DropdownButtonFormField<String>(
-                          initialValue: _statusOptions.contains(status)
-                              ? status
-                              : _statusOptions.first,
-                          decoration: const InputDecoration(
-                            labelText: 'Shipping status',
-                            border: OutlineInputBorder(),
-                          ),
-                          items: _statusOptions
-                              .map(
-                                (value) => DropdownMenuItem(
-                                  value: value,
-                                  child: Text(value),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value != null) {
+                            setState(() => _orderStatusFilter = value);
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: filteredOrders.isEmpty
+                    ? const Center(
+                        child: Text('No orders match these filters.'),
+                      )
+                    : RefreshIndicator(
+                        onRefresh: orderProvider.loadSellerOrders,
+                        child: ListView.builder(
+                          padding: const EdgeInsets.all(12),
+                          itemCount: filteredOrders.length,
+                          itemBuilder: (context, index) {
+                            final item = filteredOrders[index];
+                            final order = Map<String, dynamic>.from(
+                              item['orders'] ?? {},
+                            );
+                            final status =
+                                order['status']?.toString() ?? 'pending';
+                            final buyer =
+                                order['customer_name']?.toString() ?? 'Buyer';
+                            final orderId = resolveOrderId(order, item: item);
+                            return Card(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              child: Padding(
+                                padding: const EdgeInsets.all(14),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        const Icon(Icons.person_outline),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            buyer,
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 16,
+                                            ),
+                                          ),
+                                        ),
+                                        Text(
+                                          status,
+                                          style: const TextStyle(
+                                            color: Colors.blue,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      'Order #${shortOrderId(orderId)}',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.deepPurple,
+                                      ),
+                                    ),
+                                    const Divider(),
+                                    Text(
+                                      item['product_name']?.toString() ??
+                                          'Product',
+                                    ),
+                                    Text('Quantity: ${item['quantity'] ?? 1}'),
+                                    Text(
+                                      'Total: ${formatIndianRupees(item['item_total'])}',
+                                    ),
+                                    const Text(
+                                      'Payment: Cash on delivery',
+                                      style: TextStyle(
+                                        color: Colors.deepOrange,
+                                      ),
+                                    ),
+                                    Text(
+                                      'Placed on ${formatOrderDateTime(context, order['created_at'])}',
+                                      style: const TextStyle(
+                                        color: Colors.grey,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    const Text(
+                                      'Buyer contact details',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.phone_outlined,
+                                          size: 16,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          child: Text(
+                                            order['customer_phone']
+                                                    ?.toString() ??
+                                                'Phone not provided',
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.email_outlined,
+                                          size: 16,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          child: Text(
+                                            order['customer_email']
+                                                    ?.toString() ??
+                                                'Email not provided',
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    Text(
+                                      '${order['address'] ?? ''}, ${order['city'] ?? ''}, ${order['state'] ?? ''}, ${order['country'] ?? ''}',
+                                      style: const TextStyle(
+                                        color: Colors.grey,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 10),
+                                    DropdownButtonFormField<String>(
+                                      initialValue:
+                                          _statusOptions.contains(status)
+                                          ? status
+                                          : _statusOptions.first,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Shipping status',
+                                        border: OutlineInputBorder(),
+                                      ),
+                                      items: _statusOptions
+                                          .map(
+                                            (value) => DropdownMenuItem(
+                                              value: value,
+                                              child: Text(value),
+                                            ),
+                                          )
+                                          .toList(),
+                                      onChanged: (value) {
+                                        if (value == null || value == status) {
+                                          return;
+                                        }
+                                        orderProvider.updateOrderStatus(
+                                          orderId: orderId,
+                                          status: value,
+                                          buyerId: order['user_id'].toString(),
+                                        );
+                                      },
+                                    ),
+                                  ],
                                 ),
-                              )
-                              .toList(),
-                          onChanged: (value) {
-                            if (value == null || value == status) return;
-                            orderProvider.updateOrderStatus(
-                              orderId: orderId,
-                              status: value,
-                              buyerId: order['user_id'].toString(),
+                              ),
                             );
                           },
                         ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
+                      ),
+              ),
+            ],
           );
         },
       ),
@@ -839,6 +1015,200 @@ class _SellerScreenState extends State<SellerScreen> {
     'out for delivery',
     'delivered',
   ];
+
+  static const _orderStatusOptions = ['All', ..._statusOptions, 'cancelled'];
+
+  Widget _buildReturnsPage() {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Return Items')),
+      body: Consumer<OrderDitiyalce>(
+        builder: (context, provider, child) {
+          if (provider.isLoadingOrders) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (provider.errorMessage != null && provider.sellerReturns.isEmpty) {
+            return Center(child: Text(provider.errorMessage!));
+          }
+          if (provider.sellerReturns.isEmpty) {
+            return const Center(child: Text('No return requests yet.'));
+          }
+
+          final search = _returnSearchQuery.trim().toLowerCase();
+          final filteredReturns = provider.sellerReturns.where((request) {
+            final item = Map<String, dynamic>.from(request['order_item'] ?? {});
+            final order = Map<String, dynamic>.from(request['order'] ?? {});
+            final status = request['status']?.toString() ?? 'requested';
+            final buyer =
+                order['customer_name']?.toString().toLowerCase() ?? '';
+            final product =
+                item['product_name']?.toString().toLowerCase() ?? '';
+            final productId = (item['product_id'] ?? item['id'] ?? '')
+                .toString()
+                .toLowerCase();
+            final matchesStatus =
+                _returnStatusFilter == 'All' || status == _returnStatusFilter;
+            final matchesSearch =
+                search.isEmpty ||
+                buyer.contains(search) ||
+                product.contains(search) ||
+                productId.contains(search);
+            return matchesStatus && matchesSearch;
+          }).toList();
+
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        onChanged: (value) =>
+                            setState(() => _returnSearchQuery = value),
+                        decoration: const InputDecoration(
+                          labelText: 'Search buyer, product or product ID',
+                          prefixIcon: Icon(Icons.search),
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 150,
+                      child: DropdownButtonFormField<String>(
+                        initialValue: _returnStatusFilter,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Status',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: _returnStatusFilterOptions
+                            .map(
+                              (value) => DropdownMenuItem(
+                                value: value,
+                                child: Text(
+                                  value,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value != null) {
+                            setState(() => _returnStatusFilter = value);
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: filteredReturns.isEmpty
+                    ? const Center(
+                        child: Text('No return requests match these filters.'),
+                      )
+                    : RefreshIndicator(
+                        onRefresh: provider.loadSellerReturns,
+                        child: ListView.builder(
+                          padding: const EdgeInsets.all(12),
+                          itemCount: filteredReturns.length,
+                          itemBuilder: (context, index) {
+                            final request = filteredReturns[index];
+                            final item = Map<String, dynamic>.from(
+                              request['order_item'] ?? {},
+                            );
+                            final order = Map<String, dynamic>.from(
+                              request['order'] ?? {},
+                            );
+                            final status =
+                                request['status']?.toString() ?? 'requested';
+                            final orderId = resolveOrderId(
+                              order,
+                              item: item,
+                              request: request,
+                              fallback: request['order_id'],
+                            );
+                            return Card(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              child: Padding(
+                                padding: const EdgeInsets.all(14),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      item['product_name']?.toString() ??
+                                          'Product',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    Text(
+                                      'Buyer: ${order['customer_name']?.toString() ?? 'Buyer'}',
+                                    ),
+                                    Text('Quantity: ${item['quantity'] ?? 1}'),
+                                    Text(
+                                      'Product ID: ${item['product_id'] ?? item['id'] ?? 'N/A'}',
+                                    ),
+                                    Text('Order #${shortOrderId(orderId)}'),
+                                    const SizedBox(height: 10),
+                                    DropdownButtonFormField<String>(
+                                      initialValue:
+                                          _returnStatusOptions.contains(status)
+                                          ? status
+                                          : _returnStatusOptions.first,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Return status',
+                                        border: OutlineInputBorder(),
+                                      ),
+                                      items: _returnStatusOptions
+                                          .map(
+                                            (value) => DropdownMenuItem(
+                                              value: value,
+                                              child: Text(value),
+                                            ),
+                                          )
+                                          .toList(),
+                                      onChanged: (value) {
+                                        if (value == null || value == status)
+                                          return;
+                                        provider.updateReturnStatus(
+                                          returnId: request['id'].toString(),
+                                          status: value,
+                                          buyerId: request['buyer_id']
+                                              .toString(),
+                                          orderId: request['order_id']
+                                              .toString(),
+                                        );
+                                      },
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  static const _returnStatusOptions = [
+    'requested',
+    'pickup',
+    'checked',
+    'replacement packed',
+    'replacement shipped',
+    'shipped',
+    'payment done',
+    'rejected',
+  ];
+
+  static const _returnStatusFilterOptions = ['All', ..._returnStatusOptions];
 
   Widget _buildMessagesPage() {
     return const MessageScreen();
@@ -857,6 +1227,7 @@ class _SellerScreenState extends State<SellerScreen> {
           ),
         ],
       ),
+
       body: Consumer<Productprovider>(
         builder: (context, provider, child) {
           if (provider.isLoading) {
@@ -867,171 +1238,50 @@ class _SellerScreenState extends State<SellerScreen> {
             return const Center(child: Text('No products found. Add some!'));
           }
 
-          return ListView.builder(
-            itemCount: provider.products.length,
-            itemBuilder: (context, index) {
-              final product = provider.products[index];
-              return Card(
-                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Image Section
-                      if (isValidImageUrl(product['img_url']?.toString()))
-                        Container(
-                          width: 80,
-                          height: 80,
-                          margin: const EdgeInsets.only(right: 12),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(8),
-                            image: DecorationImage(
-                              image: NetworkImage(
-                                product['img_url'].toString(),
-                              ),
-                              fit: BoxFit.cover,
-                            ),
-                          ),
-                        )
-                      else
-                        Container(
-                          width: 80,
-                          height: 80,
-                          margin: const EdgeInsets.only(right: 12),
-                          decoration: BoxDecoration(
-                            color: Colors.grey.shade200,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Icon(
-                            Icons.image_not_supported,
-                            color: Colors.grey,
-                          ),
-                        ),
+          final filteredProducts = provider.products.where((product) {
+            final name = product['name']?.toString().toLowerCase() ?? '';
+            return name.contains(_searchQuery.toLowerCase());
+          }).toList();
 
-                      // Details Section
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              product['name'] ?? 'No Name',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            if (product['category'] != null &&
-                                product['category'].toString().isNotEmpty)
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 4,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Colors.blue.shade50,
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Text(
-                                  product['category'],
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    color: Colors.blue,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                            const SizedBox(height: 4),
-                            // Pricing
-                            Wrap(
-                              spacing: 8,
-                              children: [
-                                if (product['discount_price'] != null) ...[
-                                  Text(
-                                    '\$${product['price']}',
-                                    style: const TextStyle(
-                                      decoration: TextDecoration.lineThrough,
-                                      color: Colors.red,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                  Text(
-                                    '\$${product['discount_price']}',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.green,
-                                      fontSize: 14,
-                                    ),
-                                  ),
-                                ] else
-                                  Text(
-                                    '\$${product['price'] ?? 0.0}',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 14,
-                                    ),
-                                  ),
-                              ],
-                            ),
-                            const SizedBox(height: 4),
-                            // Quantity & Date
-                            Wrap(
-                              spacing: 8,
-                              children: [
-                                Text(
-                                  'Qty: ${product['quantity'] ?? 0}',
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey,
-                                  ),
-                                ),
-                                Text(
-                                  'Added: ${product['created_at'] != null ? DateTime.parse(product['created_at']).toLocal().toString().split(' ')[0] : 'N/A'}',
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 4),
-                            // Description
-                            if (product['description'] != null &&
-                                product['description'].toString().isNotEmpty)
-                              Text(
-                                product['description'],
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontSize: 12),
-                              ),
-                          ],
-                        ),
-                      ),
-
-                      // Actions Section
-                      Column(
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.edit, color: Colors.blue),
-                            onPressed: () =>
-                                _showProductDialog(product: product),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.delete, color: Colors.red),
-                            onPressed: () {
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: TextField(
+                  decoration: const InputDecoration(
+                    labelText: 'Search Products',
+                    prefixIcon: Icon(Icons.search),
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (value) {
+                    setState(() {
+                      _searchQuery = value;
+                    });
+                  },
+                ),
+              ),
+              Expanded(
+                child: filteredProducts.isEmpty
+                    ? const Center(
+                        child: Text('No products match your search.'),
+                      )
+                    : ListView.builder(
+                        itemCount: filteredProducts.length,
+                        itemBuilder: (context, index) {
+                          final product = filteredProducts[index];
+                          return SellerProductCard(
+                            product: product,
+                            onEdit: () => _showProductDialog(product: product),
+                            onDelete: () {
                               context.read<Productprovider>().deleteProduct(
                                 product['id'].toString(),
                               );
                             },
-                          ),
-                        ],
+                          );
+                        },
                       ),
-                    ],
-                  ),
-                ),
-              );
-            },
+              ),
+            ],
           );
         },
       ),
@@ -1039,341 +1289,6 @@ class _SellerScreenState extends State<SellerScreen> {
         onPressed: () => _showProductDialog(),
         child: const Icon(Icons.add),
       ),
-    );
-  }
-}
-
-class _DashboardFilters extends StatelessWidget {
-  final List<String> countries;
-  final List<String> states;
-  final List<String> cities;
-  final String selectedCountry;
-  final String selectedState;
-  final String selectedCity;
-  final ValueChanged<String> onCountryChanged;
-  final ValueChanged<String> onStateChanged;
-  final ValueChanged<String> onCityChanged;
-
-  const _DashboardFilters({
-    required this.countries,
-    required this.states,
-    required this.cities,
-    required this.selectedCountry,
-    required this.selectedState,
-    required this.selectedCity,
-    required this.onCountryChanged,
-    required this.onStateChanged,
-    required this.onCityChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Sales location',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 10),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final countryDropdown = _DashboardDropdown(
-                  label: 'Country',
-                  value: selectedCountry,
-                  items: countries,
-                  onChanged: onCountryChanged,
-                );
-                final stateDropdown = _DashboardDropdown(
-                  label: 'State',
-                  value: selectedState,
-                  items: states,
-                  onChanged: onStateChanged,
-                );
-
-                if (constraints.maxWidth < 420) {
-                  return Column(
-                    children: [
-                      countryDropdown,
-                      const SizedBox(height: 10),
-                      stateDropdown,
-                    ],
-                  );
-                }
-
-                return Row(
-                  children: [
-                    Expanded(child: countryDropdown),
-                    const SizedBox(width: 8),
-                    Expanded(child: stateDropdown),
-                  ],
-                );
-              },
-            ),
-            const SizedBox(height: 10),
-            _DashboardDropdown(
-              label: 'City',
-              value: selectedCity,
-              items: cities,
-              onChanged: onCityChanged,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _DashboardDropdown extends StatelessWidget {
-  final String label;
-  final String value;
-  final List<String> items;
-  final ValueChanged<String> onChanged;
-
-  const _DashboardDropdown({
-    required this.label,
-    required this.value,
-    required this.items,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final safeValue = items.contains(value) ? value : 'All';
-    return DropdownButtonFormField<String>(
-      initialValue: safeValue,
-      isExpanded: true,
-      decoration: InputDecoration(
-        labelText: label,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 10),
-      ),
-      items: items
-          .map(
-            (item) => DropdownMenuItem(
-              value: item,
-              child: Text(item, overflow: TextOverflow.ellipsis),
-            ),
-          )
-          .toList(),
-      onChanged: (nextValue) {
-        if (nextValue != null) onChanged(nextValue);
-      },
-    );
-  }
-}
-
-class _MetricCard extends StatelessWidget {
-  final String label;
-  final String value;
-  final IconData icon;
-  final Color color;
-
-  const _MetricCard({
-    required this.label,
-    required this.value,
-    required this.icon,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            Icon(icon, color: color, size: 22),
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.centerLeft,
-              child: Text(
-                value,
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-            Flexible(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.grey, fontSize: 11),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ChartCard extends StatelessWidget {
-  final String title;
-  final String? trailing;
-  final Widget child;
-
-  const _ChartCard({required this.title, this.trailing, required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    title,
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                ),
-                if (trailing != null)
-                  Text(
-                    trailing!,
-                    style: const TextStyle(
-                      color: Color(0xFF2874F0),
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            child,
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _RevenueBar extends StatelessWidget {
-  final double value;
-
-  const _RevenueBar({required this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        LinearProgressIndicator(
-          minHeight: 12,
-          value: value > 0 ? 1 : 0,
-          borderRadius: BorderRadius.circular(8),
-          color: const Color(0xFF2874F0),
-          backgroundColor: const Color(0xFFDDE8FF),
-        ),
-        const SizedBox(height: 8),
-        const Text(
-          'Revenue from delivered and active orders',
-          style: TextStyle(color: Colors.grey, fontSize: 12),
-        ),
-      ],
-    );
-  }
-}
-
-class _ProductBars extends StatelessWidget {
-  final List<MapEntry<String, int>> entries;
-
-  const _ProductBars({required this.entries});
-
-  @override
-  Widget build(BuildContext context) {
-    final maximum = entries.fold<int>(0, (max, item) {
-      return item.value > max ? item.value : max;
-    });
-    return Column(
-      children: entries.map((entry) {
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: Row(
-            children: [
-              SizedBox(
-                width: 100,
-                child: Text(
-                  entry.key,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 12),
-                ),
-              ),
-              Expanded(
-                child: LinearProgressIndicator(
-                  value: maximum == 0 ? 0 : entry.value / maximum,
-                  minHeight: 10,
-                  borderRadius: BorderRadius.circular(8),
-                  color: const Color(0xFF32A852),
-                  backgroundColor: const Color(0xFFDDF2E1),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text('${entry.value}'),
-            ],
-          ),
-        );
-      }).toList(),
-    );
-  }
-}
-
-class _StatusBars extends StatelessWidget {
-  final List<Map<String, dynamic>> orders;
-
-  const _StatusBars({required this.orders});
-
-  @override
-  Widget build(BuildContext context) {
-    const statuses = ['pending', 'packed', 'shipped', 'delivered'];
-    final counts = <String, int>{for (final status in statuses) status: 0};
-    for (final order in orders) {
-      final status = order['status']?.toString() ?? 'pending';
-      final normalized = status == 'out for delivery' ? 'shipped' : status;
-      if (counts.containsKey(normalized)) {
-        counts[normalized] = counts[normalized]! + 1;
-      }
-    }
-    final maximum = counts.values.fold<int>(
-      0,
-      (max, value) => value > max ? value : max,
-    );
-
-    return Column(
-      children: counts.entries.map((entry) {
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: Row(
-            children: [
-              SizedBox(width: 92, child: Text(entry.key)),
-              Expanded(
-                child: LinearProgressIndicator(
-                  value: maximum == 0 ? 0 : entry.value / maximum,
-                  minHeight: 10,
-                  borderRadius: BorderRadius.circular(8),
-                  color: const Color(0xFFFF9F43),
-                  backgroundColor: const Color(0xFFFFE8CC),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text('${entry.value}'),
-            ],
-          ),
-        );
-      }).toList(),
     );
   }
 }

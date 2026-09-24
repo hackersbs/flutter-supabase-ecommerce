@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:e_comerce_appliction/utils/error_handling.dart';
 
 class Productprovider extends ChangeNotifier {
   final SupabaseClient supabase = Supabase.instance.client;
@@ -12,16 +13,37 @@ class Productprovider extends ChangeNotifier {
   String? errorMessage;
 
   Future<void> getProduct() async {
+    await _loadProducts();
+  }
+
+  Future<void> getSellerProducts() async {
+    final user = supabase.auth.currentUser;
+    if (user == null) {
+      products = [];
+      errorMessage = 'Please log in as a seller first.';
+      notifyListeners();
+      return;
+    }
+    await _loadProducts(userId: user.id);
+  }
+
+  Future<void> _loadProducts({String? userId}) async {
     isLoading = true;
+    errorMessage = null;
     notifyListeners();
     try {
-      // Products link to auth.users, so fetch the product row directly.
-      final response = await supabase.from('product').select('*');
+      var query = supabase.from('product').select('*');
+      if (userId != null) {
+        query = query.eq('user_id', userId);
+      }
+      final response = await query;
       products = List<Map<String, dynamic>>.from(response);
       await loadLikes();
-      await loadPopularProducts();
+      if (userId == null) {
+        await loadPopularProducts();
+      }
     } catch (e) {
-      errorMessage = e.toString();
+      errorMessage = providerErrorMessage(e);
       debugPrint('Error fetching products: $e');
     } finally {
       isLoading = false;
@@ -97,6 +119,7 @@ class Productprovider extends ChangeNotifier {
         likedProductIds.remove(productId);
       }
       debugPrint('Error changing product like: $error');
+      errorMessage = providerErrorMessage(error);
       notifyListeners();
     }
   }
@@ -115,6 +138,7 @@ class Productprovider extends ChangeNotifier {
       );
       return List<Map<String, dynamic>>.from(response);
     } catch (error) {
+      errorMessage = providerErrorMessage(error);
       debugPrint('Error loading related products: $error');
       return [];
     }
@@ -147,7 +171,7 @@ class Productprovider extends ChangeNotifier {
 
       return supabase.storage.from('product-images').getPublicUrl(path);
     } catch (error) {
-      errorMessage = 'Image upload failed: $error';
+      errorMessage = providerErrorMessage(error);
       debugPrint('Error uploading product image: $error');
       notifyListeners();
       return null;
@@ -183,10 +207,10 @@ class Productprovider extends ChangeNotifier {
         'subcategory': subcategory ?? 'General',
         'user_id': user.id,
       });
-      await getProduct(); // Refresh the product list
+      await getSellerProducts();
       return true;
     } catch (e) {
-      errorMessage = e.toString();
+      errorMessage = providerErrorMessage(e);
       debugPrint('Error inserting product: $e');
       notifyListeners();
       return false;
@@ -204,7 +228,14 @@ class Productprovider extends ChangeNotifier {
     String? category,
     String? subcategory,
   }) async {
+    errorMessage = null;
     try {
+      final user = supabase.auth.currentUser;
+      if (user == null) {
+        errorMessage = 'Please log in as a seller first.';
+        notifyListeners();
+        return;
+      }
       await supabase
           .from('product')
           .update({
@@ -217,17 +248,26 @@ class Productprovider extends ChangeNotifier {
             'category': category ?? 'General',
             'subcategory': subcategory ?? 'General',
           })
-          .eq('id', id);
-      await getProduct(); // Refresh the product list
+          .eq('id', id)
+          .eq('user_id', user.id);
+      await getSellerProducts();
     } catch (e) {
+      errorMessage = providerErrorMessage(e);
       debugPrint('Error updating product: $e');
+      notifyListeners();
     }
   }
 
   Future<void> deleteProduct(String id) async {
     try {
-      await supabase.from('product').delete().eq('id', id);
-      await getProduct(); // Refresh the product list
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+      await supabase
+          .from('product')
+          .delete()
+          .eq('id', id)
+          .eq('user_id', user.id);
+      await getSellerProducts();
     } catch (e) {
       debugPrint('Error deleting product: $e');
     }

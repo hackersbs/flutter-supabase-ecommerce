@@ -2,8 +2,11 @@ import 'package:e_comerce_appliction/provider/userprovider.dart';
 import 'package:e_comerce_appliction/provider/orderditiyalce.dart';
 import 'package:e_comerce_appliction/provider/cardeprovider.dart';
 import 'package:flutter/material.dart';
+import 'package:e_comerce_appliction/utils/currency.dart';
+import 'package:e_comerce_appliction/utils/product_pricing.dart';
 import 'package:provider/provider.dart';
 import 'package:e_comerce_appliction/widgets/image_url.dart';
+import 'package:e_comerce_appliction/widgets/error_state.dart';
 
 class ProductCheckoutScreen extends StatefulWidget {
   final List<Map<String, dynamic>> products;
@@ -58,21 +61,9 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
     super.dispose();
   }
 
-  double _priceFor(Map<String, dynamic> product) {
-    final price = product['price'];
-    final discountPrice = product['discount_price'];
-    final originalPrice = price is num
-        ? price.toDouble()
-        : double.tryParse('$price') ?? 0;
-    final salePrice = discountPrice is num
-        ? discountPrice.toDouble()
-        : double.tryParse('$discountPrice') ?? 0;
-    return salePrice > 0 ? salePrice : originalPrice;
-  }
-
   double get _total => widget.products.fold(0, (total, product) {
     final quantity = (product['quantity'] as num?)?.toInt() ?? 1;
-    return total + (_priceFor(product) * quantity);
+    return total + (activeProductPrice(product) * quantity);
   });
 
   @override
@@ -88,6 +79,11 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
       ),
       body: userProvider.isLoading
           ? const Center(child: CircularProgressIndicator())
+          : userProvider.errorMessage != null && userProvider.userData.isEmpty
+          ? ErrorState(
+              message: userProvider.errorMessage!,
+              onRetry: userProvider.loadUser,
+            )
           : Form(
               key: _formKey,
               child: ListView(
@@ -114,7 +110,7 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
                                 color: Colors.white,
                               ),
                             )
-                          : Text('Place order • ₹${_total.toStringAsFixed(2)}'),
+                          : Text('Place order • ${formatIndianRupees(_total)}'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF2874F0),
                         foregroundColor: Colors.white,
@@ -149,7 +145,7 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
   }
 
   Widget _productTile(Map<String, dynamic> product) {
-    final imageUrl = product['img_url']?.toString() ?? '';
+    final imageUrl = product['img_url']?.toString();
     final quantity = (product['quantity'] as num?)?.toInt() ?? 1;
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
@@ -157,21 +153,7 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
         padding: const EdgeInsets.all(8),
         child: Row(
           children: [
-            SizedBox(
-              width: 62,
-              height: 62,
-              child: !isValidImageUrl(imageUrl)
-                  ? const Icon(Icons.image_not_supported, color: Colors.grey)
-                  : ClipRRect(
-                      borderRadius: BorderRadius.circular(6),
-                      child: Image.network(
-                        imageUrl,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) =>
-                            const Icon(Icons.broken_image_outlined),
-                      ),
-                    ),
-            ),
+            ProductImage(imageUrl: imageUrl, width: 62, height: 62),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
@@ -189,7 +171,7 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
             const SizedBox(width: 8),
             Flexible(
               child: Text(
-                '₹${(_priceFor(product) * quantity).toStringAsFixed(2)}',
+                formatIndianRupees(activeProductPrice(product) * quantity),
                 textAlign: TextAlign.end,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontWeight: FontWeight.bold),
@@ -214,7 +196,7 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
               style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
             ),
             Text(
-              '₹${_total.toStringAsFixed(2)}',
+              formatIndianRupees(_total),
               style: const TextStyle(
                 color: Color(0xFF2874F0),
                 fontSize: 20,

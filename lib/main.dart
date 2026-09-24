@@ -14,11 +14,29 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await dotenv.load(fileName: '.env');
-  await Supabase.initialize(
-    url: dotenv.env['SUPABASE_URL'] ?? '',
-    publishableKey: dotenv.env['SUPABASE_PUBLISHABLE_KEY'] ?? '',
-  );
+  String? startupError;
+  try {
+    await dotenv.load(fileName: '.env');
+    final supabaseUrl = dotenv.env['SUPABASE_URL'] ?? '';
+    final publishableKey = dotenv.env['SUPABASE_PUBLISHABLE_KEY'] ?? '';
+    if (supabaseUrl.isEmpty || publishableKey.isEmpty) {
+      startupError = 'The app is not configured correctly. Please contact the developer for help.';
+    } else {
+      await Supabase.initialize(
+        url: supabaseUrl,
+        publishableKey: publishableKey,
+      );
+    }
+  } catch (error) {
+    startupError =
+        'The app could not start. Please contact the developer for help.';
+  }
+
+  if (startupError != null) {
+    runApp(StartupErrorApp(message: startupError));
+    return;
+  }
+
   runApp(
     MultiProvider(
       providers: [
@@ -34,6 +52,39 @@ Future<void> main() async {
       child: MyApp(),
     ),
   );
+}
+
+class StartupErrorApp extends StatelessWidget {
+  final String message;
+
+  const StartupErrorApp({super.key, required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.error_outline, size: 56, color: Colors.red),
+                const SizedBox(height: 16),
+                Text(message, textAlign: TextAlign.center),
+                const SizedBox(height: 8),
+                const Text(
+                  'Please contact the developer and share this message.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class MyApp extends StatelessWidget {

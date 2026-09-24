@@ -1,6 +1,9 @@
 import 'package:e_comerce_appliction/provider/orderditiyalce.dart';
 import 'package:flutter/material.dart';
+import 'package:e_comerce_appliction/utils/currency.dart';
+import 'package:e_comerce_appliction/utils/date_format.dart';
 import 'package:provider/provider.dart';
+import 'package:e_comerce_appliction/widgets/error_state.dart';
 
 class OrderTrackingScreen extends StatefulWidget {
   const OrderTrackingScreen({super.key});
@@ -40,14 +43,9 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
             return const Center(child: CircularProgressIndicator());
           }
           if (provider.errorMessage != null) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Text(
-                  provider.errorMessage!,
-                  textAlign: TextAlign.center,
-                ),
-              ),
+            return ErrorState(
+              message: provider.errorMessage!,
+              onRetry: provider.loadBuyerOrders,
             );
           }
           if (provider.buyerOrders.isEmpty) {
@@ -74,22 +72,13 @@ class _OrderCard extends StatelessWidget {
 
   const _OrderCard({required this.order});
 
-  String _placedDateTime(BuildContext context, String value) {
-    final parsed = DateTime.tryParse(value);
-    if (parsed == null) return 'Order time unavailable';
-    final local = parsed.toLocal();
-    final date = MaterialLocalizations.of(context).formatMediumDate(local);
-    final time = MaterialLocalizations.of(context)
-        .formatTimeOfDay(TimeOfDay.fromDateTime(local));
-    return '$date at $time';
-  }
-
   @override
   Widget build(BuildContext context) {
     final status = order['status']?.toString() ?? 'pending';
     final statusIndex = _OrderTrackingScreenState.statuses.indexOf(status);
     final items = (order['order_items'] as List?) ?? const [];
     final date = order['created_at']?.toString() ?? '';
+    final orderId = resolveOrderId(order);
 
     return Card(
       margin: const EdgeInsets.only(bottom: 14),
@@ -107,13 +96,13 @@ class _OrderCard extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Order #${order['id']?.toString().substring(0, 8) ?? ''}',
+                    'Order #${shortOrderId(orderId)}',
                     style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ),
                 Flexible(
                   child: Text(
-                    '₹${order['total_price'] ?? 0}',
+                    formatIndianRupees(order['total_price']),
                     textAlign: TextAlign.end,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontWeight: FontWeight.bold),
@@ -125,18 +114,45 @@ class _OrderCard extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
-                  'Placed on ${_placedDateTime(context, date)}',
+                  'Placed on ${formatOrderDateTime(context, date)}',
                   style: const TextStyle(color: Colors.grey, fontSize: 12),
                 ),
               ),
             const Divider(height: 22),
             ...items.map(
               (item) => Padding(
-                padding: const EdgeInsets.only(bottom: 5),
-                child: Text(
-                  '${item['product_name']}  ×  ${item['quantity']}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${item['product_name']}  ×  ${item['quantity']}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    Builder(
+                      builder: (context) {
+                        final returnStatus = context
+                            .read<OrderDitiyalce>()
+                            .returnStatus(item['id']?.toString() ?? '');
+                        return returnStatus == null
+                            ? const SizedBox.shrink()
+                            : Padding(
+                                padding: const EdgeInsets.only(left: 8),
+                                child: Text(
+                                  returnStatus,
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    color: Colors.deepOrange,
+                                  ),
+                                ),
+                              );
+                      },
+                    ),
+                    if (_returnIsAvailable(order))
+                      _ReturnButton(order: order, item: item),
+                  ],
                 ),
               ),
             ),
@@ -159,6 +175,59 @@ class _OrderCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+
+  bool _returnIsAvailable(Map<String, dynamic> order) {
+    if (order['status']?.toString() != 'delivered') return false;
+    final deliveredAt = DateTime.tryParse(
+      order['updated_at']?.toString() ?? order['created_at']?.toString() ?? '',
+    );
+    return deliveredAt != null &&
+        DateTime.now().toUtc().difference(deliveredAt.toUtc()) <
+            const Duration(days: 6);
+  }
+}
+
+class _ReturnButton extends StatelessWidget {
+  final Map<String, dynamic> order;
+  final Map<String, dynamic> item;
+
+  const _ReturnButton({required this.order, required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = context.watch<OrderDitiyalce>();
+    final itemId = item['id']?.toString() ?? '';
+    final status = provider.returnStatus(itemId);
+    if (status != null) {
+      return Text(
+        'Return: $status',
+        style: const TextStyle(fontSize: 11, color: Colors.deepOrange),
+      );
+    }
+    return TextButton(
+      onPressed: itemId.isEmpty
+          ? null
+          : () async {
+              final sellerId = item['seller_id']?.toString();
+              final orderId = order['id']?.toString();
+              if (sellerId == null || orderId == null) return;
+              final requested = await provider.requestReturn(
+                orderId: orderId,
+                orderItemId: itemId,
+                sellerId: sellerId,
+              );
+              if (!context.mounted || requested) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    provider.errorMessage ?? 'Return request failed.',
+                  ),
+                ),
+              );
+            },
+      child: const Text('Return'),
     );
   }
 }
