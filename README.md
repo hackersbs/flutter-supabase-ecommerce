@@ -18,7 +18,7 @@ A full Flutter e-commerce application with separate buyer and seller experiences
 - View order history with a progress tracker for `pending`, `paid`, `packed`, `shipped`, `out for delivery`, and `delivered`.
 - Request a return for an eligible delivered item and follow return status updates.
 - Receive order and return notifications.
-- Message a seller about an order or product. Messages update through Supabase Realtime.
+- Message a seller about an order or product. The `messaging` Edge Function sends and loads messages, and Supabase Realtime keeps conversations up to date.
 - Edit profile details, change password, switch theme, and delete the account.
 
 ### Seller features
@@ -43,7 +43,8 @@ This project is a two-sided marketplace:
 2. A seller manages inventory, monitors business activity, processes orders, handles returns, and communicates with buyers.
 3. Supabase Auth identifies users. The `users.role` value determines whether the app opens the buyer home screen or the seller dashboard.
 4. Supabase Row Level Security (RLS) protects user profiles, products, carts, orders, messages, returns, and notifications.
-5. Checkout is performed by the database `place_order` function so stock validation, order creation, order items, and inventory reduction happen atomically.
+5. Checkout is performed by the database `place_order` function so stock validation, order creation, order items, and inventory reduction happen atomically. Razorpay orders are created and verified by the `supabase-razorpay` Edge Function.
+6. The `messaging` Edge Function calls authenticated database RPCs for sending and loading buyer-seller conversations.
 
 ## Technology Stack
 
@@ -93,6 +94,10 @@ lib/
     product_pricing.dart              Price and discount helpers
   widgets/                           Shared product, seller, error, and image widgets
 supabase_schema.sql                  Database tables, policies, triggers, and RPCs
+supabase/functions/
+  supabase-razorpay/index.ts         Razorpay order creation, payment verification, and webhook handling
+  messaging/index.ts                 Authenticated message send and conversation retrieval
+  send-fcm/index.ts                  Optional push delivery for queued notifications
 ```
 
 ## Requirements
@@ -111,15 +116,19 @@ supabase_schema.sql                  Database tables, policies, triggers, and RP
 5. Configure the bucket so product image URLs can be read by the app. Add Storage policies appropriate for your deployment; sellers need permission to upload their own images.
 6. In Authentication, configure the email provider. During development, email confirmation can be disabled, or users can confirm the email sent by Supabase before logging in.
 7. Copy the project URL and publishable key from Supabase project settings.
-8. For an existing database, apply the Razorpay-related table alterations and function definitions from `supabase_schema.sql`; new databases use the complete schema.
-9. Create and host the function directly in the **Supabase Dashboard**—no Supabase CLI or local `supabase/functions` source folder is required:
+8. For an existing database, apply the relevant table alterations and function definitions from `supabase_schema.sql`; new databases use the complete schema. This includes the message RPCs and the Razorpay order/payment functions.
+9. Deploy the Edge Functions from the files in `supabase/functions/`. You can use the Supabase CLI or create each function in the **Supabase Dashboard** by pasting the matching `index.ts` source:
    - Open **Edge Functions** in your Supabase project and choose **Deploy a new function** / **Open Editor**.
-   - Name the function `supabase-razorpay`.
-   - Replace the editor contents with the complete root-level `supabase_razorpay_.js` source and deploy it from the Dashboard.
-   - In that function's settings, turn off JWT verification. The handler validates signed-in app users itself, and Razorpay webhooks authenticate using Razorpay's webhook signature.
-10. In **Edge Function Secrets** in the Supabase Dashboard, set `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, and `RAZORPAY_WEBHOOK_SECRET`. Use Razorpay **Test Mode** credentials; the key ID must start with `rzp_test_`. Set the Razorpay webhook URL to `https://<project-ref>.supabase.co/functions/v1/supabase-razorpay` and enable the `payment.captured` event.
+   - Deploy `supabase/functions/supabase-razorpay/index.ts` as `supabase-razorpay`.
+   - Deploy `supabase/functions/messaging/index.ts` as `messaging`. Keep JWT verification enabled so only authenticated app users can call it; the function forwards the caller's authorization to the database RPCs.
+   - For Razorpay, turn off Supabase's automatic JWT verification for this function because the same endpoint receives Razorpay webhooks. The handler validates signed-in app requests itself, and verifies webhook signatures separately.
+10. In **Edge Function Secrets** in the Supabase Dashboard, set `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, and `SUPABASE_SERVICE_ROLE_KEY` for `supabase-razorpay`. Use Razorpay **Test Mode** credentials; the key ID must start with `rzp_test_`. Set the Razorpay webhook URL to `https://<project-ref>.supabase.co/functions/v1/supabase-razorpay` and enable the `payment.captured` event. Never put the Razorpay secret, webhook secret, or service-role key in the Flutter app or `.env`.
 
-The single function dispatches app actions `place-order`, `create-razorpay-order`, and `verify-razorpay-payment` from the JSON `action` field. Razorpay webhook requests use the same URL and are routed by their signature/event headers.
+The `supabase-razorpay` function dispatches app actions `place-order`, `create-razorpay-order`, and `verify-razorpay-payment` from the JSON `action` field. Razorpay webhook requests use the same URL and are routed by their signature/event headers. The function creates Razorpay orders using the server-held credentials, verifies the checkout signature and captured payment with Razorpay, and confirms payment in the database.
+
+The `messaging` function supports `send`, `get_messages`, and `get_recent_messages` actions. It forwards the signed-in user's authorization to the `send_message`, `get_messages`, and `get_recent_messages` database RPCs; those RPCs and RLS policies enforce access. The Flutter app invokes this function from `lib/provider/messageprovider.dart`. Supabase Realtime is used to keep message conversations updated after messages are stored.
+
+The optional `send-fcm` function processes queued push notifications. Configure its `SUPABASE_SERVICE_ROLE_KEY` secret before deploying it. Push delivery also requires `FIREBASE_SERVER_KEY`; without that secret, notifications remain available through the database and Supabase Realtime. Do not expose either server secret in the Flutter app.
 
 The schema includes:
 
@@ -128,6 +137,7 @@ The schema includes:
 - Realtime publication for `public.messages`.
 - `place_order` for transactional checkout and stock reduction.
 - Razorpay payment confirmation is checked server-side against the signed callback and Razorpay's captured-payment API response. The database records payment and order state atomically while locking the order row.
+- `send_message`, `get_messages`, and `get_recent_messages` for authenticated buyer-seller messaging through the `messaging` Edge Function.
 - `popular_products` for popular product results.
 - `recommended_products` for related product results.
 
@@ -141,7 +151,7 @@ SUPABASE_PUBLISHABLE_KEY=your-supabase-publishable-or-anon-key
 RAZORPAY_KEY_ID=rzp_test_your_key_id
 ```
 
-The app reads the Supabase values in `lib/main.dart`. `RAZORPAY_KEY_ID` is the public Test Mode key ID used by Flutter; the Razorpay key secret and webhook secret must only be stored as Supabase Edge Function secrets and must never be added to the Flutter `.env` file. Use your own test credentials in `.env`; the example file contains placeholders only.
+The app reads the Supabase values in `lib/main.dart`. `RAZORPAY_KEY_ID` is the public Test Mode key ID used by Flutter and is also configured as a Supabase Edge Function secret. The Razorpay key secret, webhook secret, and Supabase service-role key must only be stored as Supabase Edge Function secrets; never add them to the Flutter `.env` file. Use your own test credentials in `.env`; the example file contains placeholders only.
 
 ## Install and Run
 
@@ -282,7 +292,11 @@ Confirm that `place_order(jsonb, jsonb)` exists and that authenticated users hav
 
 ### Messages are not realtime
 
-Confirm that `public.messages` was added to the Supabase realtime publication and that the user is allowed to read the conversation through the messages RLS policies.
+Confirm that the `messaging` Edge Function is deployed with JWT verification enabled, the message RPCs from `supabase_schema.sql` exist, and the caller is signed in. Also confirm that `public.messages` was added to the Supabase Realtime publication and that the user is allowed to read the conversation through the messages RLS policies.
+
+### Razorpay checkout cannot start or payment is not confirmed
+
+Confirm that `supabase-razorpay` is deployed, the Flutter `.env` contains a `RAZORPAY_KEY_ID` beginning with `rzp_test_`, and the Razorpay key ID and key secret in Supabase Edge Function secrets belong to the same Test Mode account. For webhook-based confirmation, also configure `RAZORPAY_WEBHOOK_SECRET`, use the function URL shown above, and enable the `payment.captured` event. Check the Supabase Edge Function logs for server-side errors.
 
 ## License
 
