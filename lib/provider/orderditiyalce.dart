@@ -16,10 +16,72 @@ class OrderDitiyalce extends ChangeNotifier {
   List<Map<String, dynamic>> buyerReturns = [];
   List<Map<String, dynamic>> sellerReturns = [];
   List<Map<String, dynamic>> notifications = [];
+  List<Map<String, dynamic>> activeCoupons = [];
+  Map<String, dynamic>? appliedCoupon;
+  bool isValidatingCoupon = false;
+
+  Future<void> loadActiveCoupons() async {
+    try {
+      final response = await supabase
+          .from('coupons')
+          .select()
+          .eq('is_active', true)
+          .order('discount_value', ascending: false);
+      activeCoupons = List<Map<String, dynamic>>.from(response);
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error loading coupons: $e');
+    }
+  }
+
+  Future<Map<String, dynamic>?> applyCoupon({
+    required String code,
+    required double orderAmount,
+  }) async {
+    isValidatingCoupon = true;
+    errorMessage = null;
+    notifyListeners();
+
+    try {
+      final response = await supabase.rpc(
+        'validate_coupon',
+        params: {
+          'p_code': code.trim(),
+          'p_order_amount': orderAmount,
+        },
+      );
+
+      if (response is Map && response['valid'] == true) {
+        appliedCoupon = Map<String, dynamic>.from(response);
+        notifyListeners();
+        return appliedCoupon;
+      } else {
+        appliedCoupon = null;
+        final msg = response is Map ? response['message']?.toString() : 'Invalid coupon';
+        errorMessage = msg ?? 'Invalid coupon code';
+        notifyListeners();
+        return null;
+      }
+    } catch (e) {
+      appliedCoupon = null;
+      errorMessage = providerErrorMessage(e);
+      notifyListeners();
+      return null;
+    } finally {
+      isValidatingCoupon = false;
+      notifyListeners();
+    }
+  }
+
+  void removeCoupon() {
+    appliedCoupon = null;
+    notifyListeners();
+  }
 
   Future<String?> createOrder({
     required List<Map<String, dynamic>> products,
     required Map<String, String> customer,
+    String? couponCode,
   }) async {
     final user = supabase.auth.currentUser;
     if (user == null) {
@@ -33,11 +95,13 @@ class OrderDitiyalce extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final response = await supabase.rpc(
-        'place_order',
-        params: {
-          'p_customer': customer,
-          'p_items': products
+      final response = await supabase.functions.invoke(
+        'supabase-razorpay',
+        body: {
+          'action': 'place-order',
+          'customer': customer,
+          'coupon_code': couponCode ?? appliedCoupon?['code'],
+          'items': products
               .map(
                 (product) => {
                   'product_id': product['id'],
@@ -47,13 +111,116 @@ class OrderDitiyalce extends ChangeNotifier {
               .toList(),
         },
       );
-      return response.toString();
+
+      final data = response.data;
+      if (data is! Map || data['success'] != true) {
+        throw Exception(
+          data is Map
+              ? data['error']?.toString() ?? 'Could not place the order.'
+              : 'The order service returned an invalid response.',
+        );
+      }
+      final orderId = data['order_id']?.toString();
+      if (orderId == null || orderId.isEmpty) {
+        throw Exception('The order service did not return an order ID.');
+      }
+      appliedCoupon = null; // reset on success
+      return orderId;
     } catch (error) {
       errorMessage = providerErrorMessage(error);
       debugPrint('Error creating order: $error');
       return null;
     } finally {
       isCreating = false;
+      notifyListeners();
+    }
+  }
+
+  Future<Map<String, dynamic>?> createRazorpayOrder({
+    required List<Map<String, dynamic>> products,
+    required Map<String, String> customer,
+    String? couponCode,
+  }) async {
+    final user = supabase.auth.currentUser;
+    if (user == null) {
+      errorMessage = 'Please log in before placing an order.';
+      notifyListeners();
+      return null;
+    }
+
+    isCreating = true;
+    errorMessage = null;
+    notifyListeners();
+
+    try {
+      final response = await supabase.functions.invoke(
+        'supabase-razorpay',
+        body: {
+          'action': 'create-razorpay-order',
+          'customer': customer,
+          'coupon_code': couponCode ?? appliedCoupon?['code'],
+          'items': products
+              .map(
+                (product) => {
+                  'product_id': product['id'],
+                  'quantity': (product['quantity'] as num?)?.toInt() ?? 1,
+                },
+              )
+              .toList(),
+        },
+      );
+
+      final data = response.data;
+      if (data is! Map) {
+        throw Exception('The payment service returned an invalid response.');
+      }
+      if (data['error'] != null) {
+        throw Exception(data['error'].toString());
+      }
+      return Map<String, dynamic>.from(data);
+    } catch (error) {
+      errorMessage = providerErrorMessage(error);
+      debugPrint('Error creating Razorpay order: $error');
+      return null;
+    } finally {
+      isCreating = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> verifyRazorpayPayment({
+    required String orderId,
+    required String razorpayOrderId,
+    required String razorpayPaymentId,
+    required String razorpaySignature,
+  }) async {
+    errorMessage = null;
+    notifyListeners();
+    try {
+      final response = await supabase.functions.invoke(
+        'supabase-razorpay',
+        body: {
+          'action': 'verify-razorpay-payment',
+          'order_id': orderId,
+          'razorpay_order_id': razorpayOrderId,
+          'razorpay_payment_id': razorpayPaymentId,
+          'razorpay_signature': razorpaySignature,
+        },
+      );
+      final data = response.data;
+      if (data is! Map || data['success'] != true) {
+        throw Exception(
+          data is Map
+              ? data['error']?.toString() ?? 'Payment verification failed.'
+              : 'The payment service returned an invalid response.',
+        );
+      }
+      return true;
+    } catch (error) {
+      errorMessage = providerErrorMessage(error);
+      debugPrint('Error verifying Razorpay payment: $error');
+      return false;
+    } finally {
       notifyListeners();
     }
   }

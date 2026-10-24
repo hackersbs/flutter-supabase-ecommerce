@@ -24,7 +24,6 @@ class MessageProvider extends ChangeNotifier {
   final SupabaseClient supabase = Supabase.instance.client;
   final List<MessageContact> contacts = [];
   final Map<String, List<Map<String, dynamic>>> _messagesByUser = {};
-  RealtimeChannel? _channel;
   bool isLoading = false;
   String? errorMessage;
 
@@ -167,7 +166,6 @@ class MessageProvider extends ChangeNotifier {
         );
       await _loadRecentMessages(userId);
       _sortContacts();
-      _subscribeToMessages(userId);
     } catch (error) {
       errorMessage = providerErrorMessage(error);
       debugPrint('Error loading message contacts: $error');
@@ -187,52 +185,32 @@ class MessageProvider extends ChangeNotifier {
   }
 
   Future<void> _loadRecentMessages(String userId) async {
-    final response = await supabase
-        .from('messages')
-        .select()
-        .or('sender_id.eq.$userId,receiver_id.eq.$userId')
-        .order('created_at', ascending: false);
-    _messagesByUser.clear();
-    for (final message in response) {
-      final otherUser = message['sender_id'] == userId
-          ? message['receiver_id']?.toString()
-          : message['sender_id']?.toString();
-      if (otherUser != null && !_messagesByUser.containsKey(otherUser)) {
-        _messagesByUser[otherUser] = [Map<String, dynamic>.from(message)];
+    try {
+      final response = await supabase.functions.invoke(
+        'messaging',
+        body: {'action': 'get_recent_messages'}
+      );
+      final data = response.data;
+      if (data != null && data['error'] != null) {
+        throw data['error'];
       }
+      
+      final messagesList = (data['messages'] as List<dynamic>?) ?? [];
+      
+      _messagesByUser.clear();
+      for (final messageObj in messagesList) {
+        final message = Map<String, dynamic>.from(messageObj);
+        final otherUser = message['sender_id'] == userId
+            ? message['receiver_id']?.toString()
+            : message['sender_id']?.toString();
+        if (otherUser != null && !_messagesByUser.containsKey(otherUser)) {
+          _messagesByUser[otherUser] = [message];
+        }
+      }
+      _applyRecentMessages();
+    } catch (e) {
+      debugPrint('Error fetching recent messages: $e');
     }
-    _applyRecentMessages();
-  }
-
-  void _subscribeToMessages(String userId) {
-    _channel?.unsubscribe();
-    _channel = supabase
-        .channel('messages-for-$userId')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.insert,
-          schema: 'public',
-          table: 'messages',
-          callback: (payload) {
-            final message = Map<String, dynamic>.from(payload.newRecord);
-            if (message['sender_id'] != userId &&
-                message['receiver_id'] != userId) {
-              return;
-            }
-            final otherUser = message['sender_id'] == userId
-                ? message['receiver_id']?.toString()
-                : message['sender_id']?.toString();
-            if (otherUser == null) return;
-            final contactIndex = contacts.indexWhere(
-              (contact) => contact.userId == otherUser,
-            );
-            if (contactIndex == -1) return;
-            _appendMessage(otherUser, message);
-            _applyRecentMessages();
-            _sortContacts();
-            notifyListeners();
-          },
-        )
-        .subscribe();
   }
 
   Future<List<Map<String, dynamic>>> loadConversation(
@@ -241,21 +219,23 @@ class MessageProvider extends ChangeNotifier {
     final userId = currentUserId;
     if (userId == null) return [];
     try {
-      final response = await supabase
-          .from('messages')
-          .select()
-          .or('sender_id.eq.$userId,receiver_id.eq.$userId')
-          .order('created_at');
-      final messages = response
-          .map(Map<String, dynamic>.from)
-          .where(
-            (message) =>
-                (message['sender_id'] == userId &&
-                    message['receiver_id'] == otherUserId) ||
-                (message['sender_id'] == otherUserId &&
-                    message['receiver_id'] == userId),
-          )
+      final response = await supabase.functions.invoke(
+        'messaging',
+        body: {
+          'action': 'get_messages',
+          'other_user_id': otherUserId
+        },
+      );
+      
+      final data = response.data;
+      if (data != null && data['error'] != null) {
+        throw data['error'];
+      }
+      
+      final messages = (data['messages'] as List<dynamic>? ?? [])
+          .map((m) => Map<String, dynamic>.from(m))
           .toList();
+
       _messagesByUser[otherUserId] = messages;
       notifyListeners();
       return messages;
@@ -274,17 +254,24 @@ class MessageProvider extends ChangeNotifier {
     final text = body.trim();
     if (userId == null || text.isEmpty) return false;
     try {
-      final inserted = await supabase
-          .from('messages')
-          .insert({
-            'sender_id': userId,
-            'receiver_id': contact.userId,
-            'order_id': contact.orderId,
-            'product_id': contact.productId,
-            'body': text,
-          })
-          .select()
-          .single();
+      final response = await supabase.functions.invoke(
+        'messaging',
+        body: {
+          'action': 'send',
+          'receiver_id': contact.userId,
+          'order_id': contact.orderId,
+          'product_id': contact.productId,
+          'body': text,
+        },
+      );
+      
+      final data = response.data;
+      if (data != null && data['error'] != null) {
+        throw data['error'];
+      }
+      
+      final inserted = data['message'];
+      if (inserted == null) return false;
       _appendMessage(contact.userId, Map<String, dynamic>.from(inserted));
       _applyRecentMessages();
       _sortContacts();
@@ -343,9 +330,4 @@ class MessageProvider extends ChangeNotifier {
     });
   }
 
-  @override
-  void dispose() {
-    _channel?.unsubscribe();
-    super.dispose();
-  }
 }

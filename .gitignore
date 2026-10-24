@@ -48,5 +48,6 @@ app.*.map.json
 .widget_preview/
 
 # Local Supabase schema
-/supabase_schema.sql
+/supabase
 /.env
+

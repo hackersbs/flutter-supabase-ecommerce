@@ -14,3 +14,13 @@
 
 # Keep generated app code if necessary
 -keep class e_comerce_appliction.** { *; }
+
+# Razorpay SDK rules
+-keep class com.razorpay.** { *; }
+-dontwarn com.razorpay.**
+-dontwarn com.google.android.gms.tasks.**
+-keepattributes JavascriptInterface
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
+

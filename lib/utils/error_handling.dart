@@ -1,6 +1,19 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 String providerErrorMessage(Object error) {
+  if (error is FunctionException) {
+    final details = error.details;
+    if (details is Map && details['error'] != null) {
+      return details['error'].toString();
+    }
+    if (details is String && details.isNotEmpty) {
+      return details;
+    }
+    if (error.reasonPhrase != null && error.reasonPhrase!.isNotEmpty) {
+      return error.reasonPhrase!;
+    }
+  }
+
   final rawMessage = error.toString();
   final message = rawMessage.toLowerCase();
 

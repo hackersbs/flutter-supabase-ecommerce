@@ -6,6 +6,7 @@ import 'package:e_comerce_appliction/provider/userprovider.dart';
 import 'package:e_comerce_appliction/provider/messageprovider.dart';
 import 'package:e_comerce_appliction/provider/themeprovider.dart';
 import 'package:e_comerce_appliction/provider/reviewprovider.dart';
+import 'package:e_comerce_appliction/provider/razorpayprovider.dart';
 import 'package:e_comerce_appliction/screens/flashe_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -48,6 +49,7 @@ Future<void> main() async {
         ChangeNotifierProvider(create: (contex) => MessageProvider()),
         ChangeNotifierProvider(create: (contex) => ThemeProvider()),
         ChangeNotifierProvider(create: (contex) => ReviewProvider()),
+        ChangeNotifierProvider(create: (context) => RazorpayProvider()),
       ],
       child: MyApp(),
     ),
@@ -62,6 +64,7 @@ class StartupErrorApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      debugShowCheckedModeBanner: false,
       home: Scaffold(
         body: Center(
           child: Padding(

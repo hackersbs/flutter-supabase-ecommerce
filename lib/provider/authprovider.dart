@@ -69,9 +69,12 @@ class AthenDiction extends ChangeNotifier {
         return 'You do not have permission to perform this action.';
       }
       return 'The server could not complete that request. Please try again.';
+    } else if (errorString.contains('failed host lookup') ||
+        errorString.contains('no such host') ||
+        errorString.contains('dns')) {
+      return 'The Supabase server address could not be found. Check the SUPABASE_URL in the app configuration and your internet connection.';
     } else if (errorString.contains('socket') ||
         errorString.contains('network') ||
-        errorString.contains('failed host lookup') ||
         errorString.contains('clientexception')) {
       return 'No internet connection. Please check your network and try again.';
     } else if (errorString.contains('permission') ||
@@ -272,6 +275,13 @@ class AthenDiction extends ChangeNotifier {
         debugPrint('Error fetching role: $e');
         errorMessage = _authErrorMessage(e, signingUp: false);
         notifyListeners();
+        if (context.mounted) {
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => const LoginScreen()),
+            (route) => false,
+          );
+        }
       }
     } else {
       Navigator.pushAndRemoveUntil(

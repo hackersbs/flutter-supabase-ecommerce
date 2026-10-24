@@ -14,8 +14,8 @@ A full Flutter e-commerce application with separate buyer and seller experiences
 - Open product details with seller information, discount pricing, related products, likes, and reviews.
 - Add products to a persistent cart, change quantities, and remove products.
 - Checkout with name, email, phone, and delivery address details.
-- Place cash-on-delivery orders.
-- View order history with a progress tracker for `pending`, `packed`, `shipped`, `out for delivery`, and `delivered`.
+- Place cash-on-delivery orders or pay online using Razorpay Test Mode.
+- View order history with a progress tracker for `pending`, `paid`, `packed`, `shipped`, `out for delivery`, and `delivered`.
 - Request a return for an eligible delivered item and follow return status updates.
 - Receive order and return notifications.
 - Message a seller about an order or product. Messages update through Supabase Realtime.
@@ -51,6 +51,7 @@ This project is a two-sided marketplace:
 - Material 3
 - Provider for application state management
 - Supabase Flutter for Auth, Postgres, Storage, and Realtime
+- `razorpay_flutter` for Razorpay's mobile checkout
 - `flutter_dotenv` for local environment configuration
 - `image_picker` and `file_selector` for product images
 - `speech_to_text` for voice search
@@ -67,6 +68,7 @@ lib/
     cardeprovider.dart              Cart loading and quantity management
     messageprovider.dart            Contacts, chat, sending, realtime messages
     orderditiyalce.dart             Checkout, orders, returns, dashboard, notifications
+    razorpayprovider.dart           Razorpay checkout SDK and payment callbacks
     productprovider.dart            Products, likes, images, popular and related products
     reviewprovider.dart             Product reviews
     themeprovider.dart              Light and dark theme state
@@ -76,7 +78,7 @@ lib/
     filter_screen.dart              Product filters and sorting
     product_details_screen.dart     Product information, reviews, related products
     cart_screen.dart                Cart management
-    product_checkout_screen.dart    Delivery form and checkout
+    product_checkout_screen.dart    Delivery form, COD, and Razorpay checkout
     order_tracking_screen.dart      Buyer orders and delivery progress
     message_screen.dart              Contacts and chat screen
     notifications_screen.dart       Order and return notifications
@@ -109,6 +111,15 @@ supabase_schema.sql                  Database tables, policies, triggers, and RP
 5. Configure the bucket so product image URLs can be read by the app. Add Storage policies appropriate for your deployment; sellers need permission to upload their own images.
 6. In Authentication, configure the email provider. During development, email confirmation can be disabled, or users can confirm the email sent by Supabase before logging in.
 7. Copy the project URL and publishable key from Supabase project settings.
+8. For an existing database, apply the Razorpay-related table alterations and function definitions from `supabase_schema.sql`; new databases use the complete schema.
+9. Create and host the function directly in the **Supabase Dashboard**—no Supabase CLI or local `supabase/functions` source folder is required:
+   - Open **Edge Functions** in your Supabase project and choose **Deploy a new function** / **Open Editor**.
+   - Name the function `supabase-razorpay`.
+   - Replace the editor contents with the complete root-level `supabase_razorpay_.js` source and deploy it from the Dashboard.
+   - In that function's settings, turn off JWT verification. The handler validates signed-in app users itself, and Razorpay webhooks authenticate using Razorpay's webhook signature.
+10. In **Edge Function Secrets** in the Supabase Dashboard, set `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, and `RAZORPAY_WEBHOOK_SECRET`. Use Razorpay **Test Mode** credentials; the key ID must start with `rzp_test_`. Set the Razorpay webhook URL to `https://<project-ref>.supabase.co/functions/v1/supabase-razorpay` and enable the `payment.captured` event.
+
+The single function dispatches app actions `place-order`, `create-razorpay-order`, and `verify-razorpay-payment` from the JSON `action` field. Razorpay webhook requests use the same URL and are routed by their signature/event headers.
 
 The schema includes:
 
@@ -116,6 +127,7 @@ The schema includes:
 - RLS policies for buyer and seller access.
 - Realtime publication for `public.messages`.
 - `place_order` for transactional checkout and stock reduction.
+- Razorpay payment confirmation is checked server-side against the signed callback and Razorpay's captured-payment API response. The database records payment and order state atomically while locking the order row.
 - `popular_products` for popular product results.
 - `recommended_products` for related product results.
 
@@ -126,9 +138,10 @@ Create a file named `.env` in the project root. Do not commit it.
 ```env
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_PUBLISHABLE_KEY=your-supabase-publishable-or-anon-key
+RAZORPAY_KEY_ID=rzp_test_your_key_id
 ```
 
-The app reads these values in `lib/main.dart`. If either value is missing, the app shows a startup configuration error instead of attempting to connect.
+The app reads the Supabase values in `lib/main.dart`. `RAZORPAY_KEY_ID` is the public Test Mode key ID used by Flutter; the Razorpay key secret and webhook secret must only be stored as Supabase Edge Function secrets and must never be added to the Flutter `.env` file. Use your own test credentials in `.env`; the example file contains placeholders only.
 
 ## Install and Run
 
@@ -246,6 +259,10 @@ For a production app, keep detailed server logs private and show users the safe 
 ### The app shows a startup configuration error
 
 Confirm that `.env` exists in the project root and contains both `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`. Then stop and rerun the app.
+
+### The splash screen cannot refresh a saved login
+
+If the app reports that the Supabase server address cannot be found, verify that `SUPABASE_URL` in `.env` exactly matches the **Project URL** shown in the Supabase Dashboard under **Project Settings > API**. Confirm the project is active and the device has internet access, then rebuild and reinstall the app so the updated `.env` asset is included. The login screen remains available while the connection is unavailable, but authentication and app data require a working Supabase endpoint.
 
 ### Login succeeds but the wrong screen opens
 
