@@ -197,37 +197,136 @@ class _ReturnButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final provider = context.watch<OrderDitiyalce>();
     final itemId = item['id']?.toString() ?? '';
     final status = provider.returnStatus(itemId);
+
     if (status != null) {
-      return Text(
-        'Return: $status',
-        style: const TextStyle(fontSize: 11, color: Colors.deepOrange),
+      Color badgeBg;
+      Color badgeTextColor;
+      IconData badgeIcon;
+
+      switch (status.toLowerCase()) {
+        case 'approved':
+          badgeBg = Colors.green.withValues(alpha: 0.12);
+          badgeTextColor = Colors.green.shade700;
+          badgeIcon = Icons.check_circle_outline;
+          break;
+        case 'rejected':
+          badgeBg = Colors.red.withValues(alpha: 0.12);
+          badgeTextColor = Colors.red.shade700;
+          badgeIcon = Icons.cancel_outlined;
+          break;
+        default:
+          badgeBg = Colors.orange.withValues(alpha: 0.12);
+          badgeTextColor = Colors.orange.shade800;
+          badgeIcon = Icons.hourglass_top_outlined;
+      }
+
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: badgeBg,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: badgeTextColor.withValues(alpha: 0.3)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(badgeIcon, size: 14, color: badgeTextColor),
+            const SizedBox(width: 4),
+            Text(
+              'Return: ${status[0].toUpperCase()}${status.substring(1)}',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: badgeTextColor,
+              ),
+            ),
+          ],
+        ),
       );
     }
-    return TextButton(
+
+    return OutlinedButton.icon(
+      style: OutlinedButton.styleFrom(
+        foregroundColor: theme.colorScheme.error,
+        side: BorderSide(color: theme.colorScheme.error.withValues(alpha: 0.5)),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        minimumSize: Size.zero,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+      ),
+      icon: const Icon(Icons.assignment_return_outlined, size: 14),
+      label: const Text(
+        'Return Item',
+        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+      ),
       onPressed: itemId.isEmpty
           ? null
           : () async {
+              final confirmed = await showDialog<bool>(
+                context: context,
+                builder: (dialogCtx) => AlertDialog(
+                  title: const Row(
+                    children: [
+                      Icon(Icons.assignment_return_outlined, color: Colors.orange),
+                      SizedBox(width: 8),
+                      Text('Return Product?'),
+                    ],
+                  ),
+                  content: Text(
+                    'Are you sure you want to request a return for "${item['title'] ?? 'this item'}"?',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(dialogCtx, false),
+                      child: const Text('Cancel'),
+                    ),
+                    FilledButton(
+                      style: FilledButton.styleFrom(backgroundColor: Colors.deepOrange),
+                      onPressed: () => Navigator.pop(dialogCtx, true),
+                      child: const Text('Confirm Return'),
+                    ),
+                  ],
+                ),
+              );
+
+              if (confirmed != true) return;
+
               final sellerId = item['seller_id']?.toString();
               final orderId = order['id']?.toString();
               if (sellerId == null || orderId == null) return;
+
               final requested = await provider.requestReturn(
                 orderId: orderId,
                 orderItemId: itemId,
                 sellerId: sellerId,
               );
-              if (!context.mounted || requested) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    provider.errorMessage ?? 'Return request failed.',
+
+              if (!context.mounted) return;
+
+              if (requested) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    backgroundColor: Colors.green,
+                    content: Text('Return request submitted successfully!'),
                   ),
-                ),
-              );
+                );
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    backgroundColor: Colors.red,
+                    content: Text(
+                      provider.errorMessage ?? 'Return request failed.',
+                    ),
+                  ),
+                );
+              }
             },
-      child: const Text('Return'),
     );
   }
 }

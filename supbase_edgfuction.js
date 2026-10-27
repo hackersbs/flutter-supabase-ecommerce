@@ -12,7 +12,7 @@ serve(async (req) => {
   }
 
   try {
-    const { customer, items } = await req.json();
+    const { customer, items, payment_method, coupon_code } = await req.json();
     if (!customer || typeof customer !== 'object' || !Array.isArray(items) || items.length === 0) {
       return new Response(
         JSON.stringify({ error: 'Delivery details and cart items are required.' }),
@@ -26,12 +26,12 @@ serve(async (req) => {
       { global: { headers: { Authorization: req.headers.get('Authorization') ?? '' } } }
     );
 
-    // Call the PostgreSQL place_order function.
-    // This function handles atomic updates, ACID transactions, and row-level locking (FOR UPDATE)
+    // Call the PostgreSQL place_order function with atomic row locks & transactions.
     const { data, error } = await supabaseClient.rpc('place_order', {
       p_customer: customer,
       p_items: items,
-      p_payment_method: 'cash_on_delivery',
+      p_payment_method: payment_method || 'cash_on_delivery',
+      p_coupon_code: coupon_code || null,
     });
 
     if (error) {

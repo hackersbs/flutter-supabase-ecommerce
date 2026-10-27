@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:e_comerce_appliction/provider/userprovider.dart';
 import 'package:e_comerce_appliction/provider/orderditiyalce.dart';
 import 'package:e_comerce_appliction/provider/cardeprovider.dart';
@@ -124,17 +126,34 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
                   ..._userFields.map(_userField),
                   const SizedBox(height: 16),
                   _sectionTitle('Payment method', Icons.payment_outlined),
-                  _paymentMethodOption(
-                    value: 'cash_on_delivery',
-                    title: 'Cash on delivery',
-                    subtitle: 'Pay when your order is delivered',
-                    icon: Icons.payments_outlined,
-                  ),
-                  _paymentMethodOption(
-                    value: 'razorpay',
-                    title: 'Razorpay Test Mode',
-                    subtitle: 'Pay securely using Razorpay test credentials',
-                    icon: Icons.lock_outline,
+                  RadioGroup<String>(
+                    groupValue: _paymentMethod,
+                    onChanged: (selected) {
+                      if (_isSubmitting || selected == null) return;
+                      setState(() => _paymentMethod = selected);
+                    },
+                    child: Column(
+                      children: [
+                        _paymentMethodOption(
+                          value: 'cash_on_delivery',
+                          title: 'Cash on delivery',
+                          subtitle: 'Pay when your order is delivered',
+                          icon: Icons.payments_outlined,
+                        ),
+                        _paymentMethodOption(
+                          value: 'razorpay',
+                          title: 'Razorpay Standard Checkout',
+                          subtitle: 'Cards, UPI, netbanking, and wallets',
+                          icon: Icons.lock_outline,
+                        ),
+                        _paymentMethodOption(
+                          value: 'razorpay_qr',
+                          title: 'Pay by UPI QR code',
+                          subtitle: 'Scan with a UPI app on any device',
+                          icon: Icons.qr_code_2,
+                        ),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 12),
                   SizedBox(
@@ -154,9 +173,11 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
                               ),
                             )
                           : Text(
-                              _paymentMethod == 'razorpay'
-                                  ? 'Pay • ${formatIndianRupees(payableTotal)}'
-                                  : 'Place order • ${formatIndianRupees(payableTotal)}',
+                              _paymentMethod == 'cash_on_delivery'
+                                  ? 'Place order • ${formatIndianRupees(payableTotal)}'
+                                  : _paymentMethod == 'razorpay_qr'
+                                  ? 'Show UPI QR • ${formatIndianRupees(payableTotal)}'
+                                  : 'Pay • ${formatIndianRupees(payableTotal)}',
                             ),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF2874F0),
@@ -273,7 +294,10 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
                 const Spacer(),
                 if (appliedCoupon != null)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
                     decoration: BoxDecoration(
                       color: const Color(0xFFE8F5E9),
                       borderRadius: BorderRadius.circular(20),
@@ -433,7 +457,8 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
                   runSpacing: 6,
                   children: activeCoupons.map((coupon) {
                     final code = coupon['code']?.toString() ?? '';
-                    final minOrder = (coupon['min_order_amount'] as num?)?.toDouble() ?? 0.0;
+                    final minOrder =
+                        (coupon['min_order_amount'] as num?)?.toDouble() ?? 0.0;
                     final isEligible = _subtotal >= minOrder;
 
                     return ActionChip(
@@ -488,7 +513,10 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
     );
   }
 
-  Future<void> _handleApplyCoupon(OrderDitiyalce orderProvider, {String? code}) async {
+  Future<void> _handleApplyCoupon(
+    OrderDitiyalce orderProvider, {
+    String? code,
+  }) async {
     final couponCode = (code ?? _couponController.text).trim().toUpperCase();
     if (couponCode.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -543,7 +571,10 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
                 ),
                 Text(
                   formatIndianRupees(_subtotal),
-                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ],
             ),
@@ -556,7 +587,10 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
                     children: [
                       const Text(
                         'Coupon Discount',
-                        style: TextStyle(fontSize: 14, color: Color(0xFF2E7D32)),
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF2E7D32),
+                        ),
                       ),
                       const SizedBox(width: 4),
                       Text(
@@ -643,14 +677,6 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
       margin: const EdgeInsets.only(bottom: 8),
       child: RadioListTile<String>(
         value: value,
-        groupValue: _paymentMethod,
-        onChanged: _isSubmitting
-            ? null
-            : (selected) {
-                if (selected != null) {
-                  setState(() => _paymentMethod = selected);
-                }
-              },
         secondary: Icon(icon, color: const Color(0xFF2874F0)),
         title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
         subtitle: Text(subtitle),
@@ -713,6 +739,49 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
           );
         }
         paymentConfirmed = true;
+      } else if (_paymentMethod == 'razorpay_qr') {
+        final qrPayment = await orderProvider.createRazorpayQrCode(
+          products: widget.products,
+          customer: customer,
+          couponCode: appliedCouponCode,
+        );
+        if (qrPayment == null) {
+          throw Exception(
+            orderProvider.errorMessage ?? 'Could not create the UPI QR code.',
+          );
+        }
+
+        orderId = qrPayment['order_id']?.toString();
+        final imageUrl = qrPayment['image_url']?.toString() ?? '';
+        final rawQrAmount = qrPayment['amount'];
+        final qrAmountInPaise = rawQrAmount is num
+            ? rawQrAmount.round()
+            : int.tryParse(rawQrAmount?.toString() ?? '');
+        final qrCurrency = qrPayment['currency']?.toString().toUpperCase();
+        if (orderId == null ||
+            orderId.isEmpty ||
+            imageUrl.isEmpty ||
+            qrAmountInPaise == null ||
+            qrAmountInPaise <= 0 ||
+            qrCurrency != 'INR') {
+          throw Exception('The payment service returned an invalid QR code.');
+        }
+        if (!mounted) return;
+
+        paymentConfirmed =
+            await showDialog<bool>(
+              context: context,
+              barrierDismissible: false,
+              builder: (_) => _RazorpayQrDialog(
+                imageUrl: imageUrl,
+                amount: qrAmountInPaise / 100,
+                getPaymentStatus: () =>
+                    orderProvider.razorpayPaymentStatus(orderId: orderId!),
+                cancelPayment: () =>
+                    orderProvider.cancelRazorpayQr(orderId: orderId!),
+              ),
+            ) ??
+            false;
       } else {
         final paymentOrder = await orderProvider.createRazorpayOrder(
           products: widget.products,
@@ -736,7 +805,7 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
         final amount = rawAmount is num
             ? rawAmount.round()
             : int.tryParse(rawAmount?.toString() ?? '') ??
-                (payableTotal * 100).round();
+                  (payableTotal * 100).round();
         final currency =
             paymentOrder['currency']?.toString().toUpperCase() ?? 'INR';
 
@@ -812,10 +881,12 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
       builder: (dialogCtx) => AlertDialog(
         icon: const Icon(Icons.check_circle, color: Colors.green, size: 52),
         title: Text(
-          _paymentMethod == 'razorpay' ? 'Payment successful' : 'Order placed',
+          _paymentMethod == 'cash_on_delivery'
+              ? 'Order placed'
+              : 'Payment successful',
         ),
         content: Text(
-          _paymentMethod == 'razorpay'
+          _paymentMethod != 'cash_on_delivery'
               ? 'Your Razorpay payment has been confirmed! Your order is now visible in "My Orders" for you and in the seller dashboard for the seller.'
               : 'Your order ID is $orderId. You can track this order under "My Orders".',
         ),
@@ -835,5 +906,132 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
     orderProvider.removeCoupon();
     if (!mounted) return;
     Navigator.pop(context);
+  }
+}
+
+class _RazorpayQrDialog extends StatefulWidget {
+  const _RazorpayQrDialog({
+    required this.imageUrl,
+    required this.amount,
+    required this.getPaymentStatus,
+    required this.cancelPayment,
+  });
+
+  final String imageUrl;
+  final double amount;
+  final Future<String?> Function() getPaymentStatus;
+  final Future<bool> Function() cancelPayment;
+
+  @override
+  State<_RazorpayQrDialog> createState() => _RazorpayQrDialogState();
+}
+
+class _RazorpayQrDialogState extends State<_RazorpayQrDialog> {
+  Timer? _pollTimer;
+  bool _isPolling = false;
+  bool _isCancelling = false;
+  String _statusMessage = 'Waiting for your UPI payment...';
+
+  @override
+  void initState() {
+    super.initState();
+    _pollPaymentStatus();
+    _pollTimer = Timer.periodic(
+      const Duration(seconds: 3),
+      (_) => _pollPaymentStatus(),
+    );
+  }
+
+  Future<void> _pollPaymentStatus() async {
+    if (_isPolling || !mounted) return;
+    _isPolling = true;
+    try {
+      final status = await widget.getPaymentStatus();
+      if (!mounted) return;
+      if (status == 'paid') {
+        _pollTimer?.cancel();
+        Navigator.of(context).pop(true);
+      } else if (status == 'failed') {
+        setState(
+          () => _statusMessage = 'Payment failed. You can close this window.',
+        );
+      }
+    } finally {
+      _isPolling = false;
+    }
+  }
+
+  Future<void> _cancelPayment() async {
+    if (_isCancelling) return;
+    setState(() {
+      _isCancelling = true;
+      _statusMessage = 'Closing the QR and cancelling the order...';
+    });
+    final cancelled = await widget.cancelPayment();
+    if (!mounted) return;
+    if (cancelled) {
+      Navigator.of(context).pop(false);
+    } else {
+      setState(() {
+        _isCancelling = false;
+        _statusMessage = 'Could not confirm cancellation. Payment status is still being checked.';
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Pay with UPI QR'),
+      content: SizedBox(
+        width: 280,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              formatIndianRupees(widget.amount),
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            Image.network(
+              widget.imageUrl,
+              width: 220,
+              height: 220,
+              fit: BoxFit.contain,
+              errorBuilder: (_, _, _) => const SizedBox(
+                width: 220,
+                height: 220,
+                child: Center(
+                  child: Text('Could not load the payment QR code.'),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Scan this code in your UPI app. Payment status is checked securely.',
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _statusMessage,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Theme.of(context).colorScheme.primary),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isCancelling ? null : _cancelPayment,
+          child: Text(_isCancelling ? 'Cancelling...' : 'Cancel order'),
+        ),
+      ],
+    );
   }
 }

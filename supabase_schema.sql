@@ -1387,3 +1387,180 @@ on conflict (code) do update set
   max_discount = excluded.max_discount,
   total_quantity = excluded.total_quantity,
   is_active = excluded.is_active;
+
+-- =========================================================
+-- RAZORPAY PAYMENT LEDGER AND UPI QR CONFIRMATION
+-- =========================================================
+create table if not exists public.payments (
+  id uuid primary key default gen_random_uuid(),
+  order_id uuid not null unique references public.orders(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  razorpay_order_id text unique,
+  razorpay_payment_id text unique,
+  razorpay_signature text,
+  qr_code_id text unique,
+  qr_image_url text,
+  amount numeric(12, 2) not null check (amount > 0),
+  currency text not null default 'INR' check (char_length(currency) = 3),
+  status text not null default 'created'
+    check (status in ('created', 'paid', 'failed')),
+  payment_method text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint payments_provider_reference_check
+    check (razorpay_order_id is not null or qr_code_id is not null)
+);
+
+create index if not exists payments_user_created_idx
+  on public.payments(user_id, created_at desc);
+
+alter table public.payments enable row level security;
+revoke all on public.payments from public, anon, authenticated;
+grant select on public.payments to authenticated;
+grant all on public.payments to service_role;
+
+drop policy if exists "Users can read own payments" on public.payments;
+create policy "Users can read own payments"
+  on public.payments for select to authenticated
+  using (auth.uid() = user_id);
+
+create or replace function public.set_payment_updated_at()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+drop trigger if exists payments_set_updated_at on public.payments;
+create trigger payments_set_updated_at
+before update on public.payments
+for each row execute function public.set_payment_updated_at();
+
+create or replace function public.sync_payment_from_order()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.payments
+  set status = case
+        when new.payment_status = 'paid' then 'paid'
+        when new.payment_status in ('failed', 'refunded') or new.status = 'cancelled'
+          then 'failed'
+        else status
+      end,
+      razorpay_payment_id = coalesce(new.razorpay_payment_id, razorpay_payment_id)
+  where order_id = new.id;
+  return new;
+end;
+$$;
+
+revoke all on function public.sync_payment_from_order() from public, anon, authenticated;
+drop trigger if exists orders_sync_payment on public.orders;
+create trigger orders_sync_payment
+after update of payment_status, razorpay_payment_id, status on public.orders
+for each row execute function public.sync_payment_from_order();
+
+create or replace function public.confirm_qr_payment(
+  p_event_id text,
+  p_order_id uuid,
+  p_qr_code_id text,
+  p_payment_id text,
+  p_amount integer,
+  p_currency text,
+  p_payment_method text,
+  p_payload jsonb
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_order public.orders%rowtype;
+  v_payment public.payments%rowtype;
+  v_existing_event public.payment_webhook_events%rowtype;
+begin
+  if p_event_id is null or trim(p_event_id) = ''
+     or p_qr_code_id is null or trim(p_qr_code_id) = ''
+     or p_payment_id is null or trim(p_payment_id) = ''
+     or p_amount is null or p_amount <= 0
+     or p_currency is distinct from 'INR'
+     or p_payment_method is null or trim(p_payment_method) = '' then
+    raise exception 'Invalid Razorpay QR payment details';
+  end if;
+
+  select * into v_order
+  from public.orders
+  where id = p_order_id
+  for update;
+  if not found then
+    raise exception 'Order not found';
+  end if;
+
+  select * into v_payment
+  from public.payments
+  where order_id = p_order_id and qr_code_id = p_qr_code_id
+  for update;
+  if not found or v_order.payment_method <> 'razorpay'
+     or v_payment.currency <> p_currency
+     or round(v_payment.amount * 100)::integer <> p_amount
+     or round(v_order.total_price * 100)::integer <> p_amount then
+    raise exception 'QR payment does not match this order';
+  end if;
+
+  select * into v_existing_event
+  from public.payment_webhook_events
+  where event_id = p_event_id;
+  if found then
+    if v_existing_event.order_id <> p_order_id
+       or v_existing_event.event_type <> 'qr_code.credited' then
+      raise exception 'Razorpay event ID was already used for a different event';
+    end if;
+    return jsonb_build_object('success', true, 'status', 'paid', 'already_processed', true);
+  end if;
+
+  if v_order.payment_status = 'paid' then
+    if v_order.razorpay_payment_id = p_payment_id then
+      return jsonb_build_object('success', true, 'status', 'paid', 'already_processed', true);
+    end if;
+    raise exception 'A different payment has already been applied to this order';
+  end if;
+  if v_order.status <> 'pending' or v_order.payment_status <> 'pending'
+     or v_payment.status <> 'created' then
+    raise exception 'Order is no longer awaiting QR payment';
+  end if;
+
+  insert into public.payment_webhook_events (
+    event_id, order_id, event_type, payload, status
+  ) values (
+    p_event_id, p_order_id, 'qr_code.credited', coalesce(p_payload, '{}'::jsonb), 'processed'
+  );
+
+  update public.orders
+  set status = 'paid',
+      payment_status = 'paid',
+      razorpay_payment_id = p_payment_id,
+      updated_at = now()
+  where id = p_order_id;
+
+  update public.payments
+  set payment_method = p_payment_method,
+      razorpay_payment_id = p_payment_id
+  where id = v_payment.id;
+
+  return jsonb_build_object('success', true, 'status', 'paid');
+end;
+$$;
+
+revoke all on function public.confirm_qr_payment(
+  text, uuid, text, text, integer, text, text, jsonb
+) from public, anon, authenticated;
+grant execute on function public.confirm_qr_payment(
+  text, uuid, text, text, integer, text, text, jsonb
+) to service_role;

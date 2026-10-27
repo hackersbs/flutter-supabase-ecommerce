@@ -14,7 +14,7 @@ A full Flutter e-commerce application with separate buyer and seller experiences
 - Open product details with seller information, discount pricing, related products, likes, and reviews.
 - Add products to a persistent cart, change quantities, and remove products.
 - Checkout with name, email, phone, and delivery address details.
-- Place cash-on-delivery orders or pay online using Razorpay Test Mode.
+- Place cash-on-delivery orders, pay through Razorpay Standard Checkout, or display a fixed-amount UPI QR code for scanning from another device.
 - View order history with a progress tracker for `pending`, `paid`, `packed`, `shipped`, `out for delivery`, and `delivered`.
 - Request a return for an eligible delivered item and follow return status updates.
 - Receive order and return notifications.
@@ -43,7 +43,7 @@ This project is a two-sided marketplace:
 2. A seller manages inventory, monitors business activity, processes orders, handles returns, and communicates with buyers.
 3. Supabase Auth identifies users. The `users.role` value determines whether the app opens the buyer home screen or the seller dashboard.
 4. Supabase Row Level Security (RLS) protects user profiles, products, carts, orders, messages, returns, and notifications.
-5. Checkout is performed by the database `place_order` function so stock validation, order creation, order items, and inventory reduction happen atomically. Razorpay orders are created and verified by the `supabase-razorpay` Edge Function.
+5. Checkout is performed by the database `place_order` function so stock validation, order creation, order items, and inventory reduction happen atomically. Razorpay standard and QR payments are created and verified by the `supabase-razorpay` Edge Function; confirmed payments are mirrored in the RLS-protected `payments` ledger.
 6. The `messaging` Edge Function calls authenticated database RPCs for sending and loading buyer-seller conversations.
 
 ## Technology Stack
@@ -79,7 +79,7 @@ lib/
     filter_screen.dart              Product filters and sorting
     product_details_screen.dart     Product information, reviews, related products
     cart_screen.dart                Cart management
-    product_checkout_screen.dart    Delivery form, COD, and Razorpay checkout
+    product_checkout_screen.dart    Delivery form, COD, Standard Checkout, and UPI QR payment
     order_tracking_screen.dart      Buyer orders and delivery progress
     message_screen.dart              Contacts and chat screen
     notifications_screen.dart       Order and return notifications
@@ -94,6 +94,9 @@ lib/
     product_pricing.dart              Price and discount helpers
   widgets/                           Shared product, seller, error, and image widgets
 supabase_schema.sql                  Database tables, policies, triggers, and RPCs
+supabase/migrations/20261027_razorpay_tables.sql
+                                      Payment ledger, RLS, timestamp trigger, QR confirmation RPC
+supabase_razorpay.js                 Dashboard-pasteable Razorpay Edge Function source
 supabase/functions/
   supabase-razorpay/index.ts         Razorpay order creation, payment verification, and webhook handling
   messaging/index.ts                 Authenticated message send and conversation retrieval
@@ -111,20 +114,21 @@ supabase/functions/
 
 1. Create a project at [supabase.com](https://supabase.com/).
 2. Open the Supabase SQL Editor.
-3. Copy and run the complete contents of `supabase_schema.sql`.
-4. In Supabase Storage, create a bucket named `product-images`.
-5. Configure the bucket so product image URLs can be read by the app. Add Storage policies appropriate for your deployment; sellers need permission to upload their own images.
-6. In Authentication, configure the email provider. During development, email confirmation can be disabled, or users can confirm the email sent by Supabase before logging in.
-7. Copy the project URL and publishable key from Supabase project settings.
-8. For an existing database, apply the relevant table alterations and function definitions from `supabase_schema.sql`; new databases use the complete schema. This includes the message RPCs and the Razorpay order/payment functions.
-9. Deploy the Edge Functions from the files in `supabase/functions/`. You can use the Supabase CLI or create each function in the **Supabase Dashboard** by pasting the matching `index.ts` source:
+3. For a new project, copy and run the complete contents of `supabase_schema.sql`. It includes the payment ledger and QR confirmation SQL at the end.
+4. For an existing project that already ran the base schema, run `supabase/migrations/20261027_razorpay_tables.sql` once. Do not run both copies of the payment SQL unnecessarily.
+5. In Supabase Storage, create a bucket named `product-images`.
+6. Configure the bucket so product image URLs can be read by the app. Add Storage policies appropriate for your deployment; sellers need permission to upload their own images.
+7. In Authentication, configure the email provider. During development, email confirmation can be disabled, or users can confirm the email sent by Supabase before logging in.
+8. Copy the project URL and publishable key from Supabase project settings.
+9. Deploy the SQL functions before deploying the matching Edge Function.
+10. Deploy the Edge Functions from `supabase/functions/` with the Supabase CLI, or use the **Supabase Dashboard** editor:
    - Open **Edge Functions** in your Supabase project and choose **Deploy a new function** / **Open Editor**.
-   - Deploy `supabase/functions/supabase-razorpay/index.ts` as `supabase-razorpay`.
+  - Create/deploy `supabase-razorpay` and paste the complete root `supabase_razorpay.js` source into its editor. The equivalent CLI source is `supabase/functions/supabase-razorpay/index.ts`.
    - Deploy `supabase/functions/messaging/index.ts` as `messaging`. Keep JWT verification enabled so only authenticated app users can call it; the function forwards the caller's authorization to the database RPCs.
    - For Razorpay, turn off Supabase's automatic JWT verification for this function because the same endpoint receives Razorpay webhooks. The handler validates signed-in app requests itself, and verifies webhook signatures separately.
-10. In **Edge Function Secrets** in the Supabase Dashboard, set `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, and `SUPABASE_SERVICE_ROLE_KEY` for `supabase-razorpay`. Use Razorpay **Test Mode** credentials; the key ID must start with `rzp_test_`. Set the Razorpay webhook URL to `https://<project-ref>.supabase.co/functions/v1/supabase-razorpay` and enable the `payment.captured` event. Never put the Razorpay secret, webhook secret, or service-role key in the Flutter app or `.env`.
+11. In **Edge Function Secrets** in the Supabase Dashboard, set `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, and `SUPABASE_SERVICE_ROLE_KEY` for `supabase-razorpay`. Use Razorpay **Test Mode** credentials; the key ID must start with `rzp_test_`. Set the Razorpay webhook URL to `https://<project-ref>.supabase.co/functions/v1/supabase-razorpay` and enable both `payment.captured` and `qr_code.credited` events. Never put the Razorpay secret, webhook secret, or service-role key in the Flutter app or `.env`.
 
-The `supabase-razorpay` function dispatches app actions `place-order`, `create-razorpay-order`, and `verify-razorpay-payment` from the JSON `action` field. Razorpay webhook requests use the same URL and are routed by their signature/event headers. The function creates Razorpay orders using the server-held credentials, verifies the checkout signature and captured payment with Razorpay, and confirms payment in the database.
+The `supabase-razorpay` function dispatches app actions `place-order`, `create-razorpay-order`, `create-razorpay-qr`, `razorpay-payment-status`, `cancel-razorpay-qr`, and `verify-razorpay-payment` from the JSON `action` field. Razorpay webhook requests use the same URL and are routed by their signature/event headers. The function creates Razorpay orders and fixed-amount UPI QR codes using server-held credentials, verifies payments, and confirms status in the database. The QR flow displays Razorpay's hosted QR image and polls the authenticated status action; payment confirmation comes only from the verified webhook.
 
 The `messaging` function supports `send`, `get_messages`, and `get_recent_messages` actions. It forwards the signed-in user's authorization to the `send_message`, `get_messages`, and `get_recent_messages` database RPCs; those RPCs and RLS policies enforce access. The Flutter app invokes this function from `lib/provider/messageprovider.dart`. Supabase Realtime is used to keep message conversations updated after messages are stored.
 
@@ -136,7 +140,8 @@ The schema includes:
 - RLS policies for buyer and seller access.
 - Realtime publication for `public.messages`.
 - `place_order` for transactional checkout and stock reduction.
-- Razorpay payment confirmation is checked server-side against the signed callback and Razorpay's captured-payment API response. The database records payment and order state atomically while locking the order row.
+- The `payments` table stores provider references and payment state with owner-only RLS. A trigger maintains `updated_at` and mirrors order payment transitions.
+- Razorpay payment confirmation is checked server-side against the signed callback/webhook and captured-payment amount. The database records payment and order state atomically while locking the order row.
 - `send_message`, `get_messages`, and `get_recent_messages` for authenticated buyer-seller messaging through the `messaging` Edge Function.
 - `popular_products` for popular product results.
 - `recommended_products` for related product results.
@@ -229,6 +234,7 @@ The complete SQL definition is in `supabase_schema.sql`.
 | `product_likes` | Buyer product likes | Composite key: `user_id`, `product_id` |
 | `cart_items` | Persistent buyer cart | Unique `user_id`, `product_id` |
 | `orders` | Customer delivery details, total, payment, and status | `user_id` references `auth.users.id` |
+| `payments` | Razorpay order/QR references, amount, and payment status | `order_id` references `orders.id`; `user_id` references `auth.users.id` |
 | `order_items` | Product snapshots belonging to an order | References `orders`, `product`, and seller |
 | `notifications` | Buyer updates for orders and returns | Optional `order_id` reference |
 | `return_requests` | Item-level return workflow | References `order_items`, buyer, and seller |

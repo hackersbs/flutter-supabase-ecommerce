@@ -200,7 +200,7 @@ async function createRazorpayOrder(request, body) {
 
   const { data: order, error: readError } = await client
     .from("orders")
-    .select("id, total_price, payment_method, payment_status, status")
+    .select("id, user_id, total_price, payment_method, payment_status, status")
     .eq("id", orderId)
     .single();
 
@@ -290,6 +290,27 @@ async function createRazorpayOrder(request, body) {
     }, 502);
   }
 
+  const { error: paymentRecordError } = await serviceClient()
+    .from("payments")
+    .insert({
+      order_id: orderId,
+      user_id: order.user_id,
+      razorpay_order_id: providerData.id,
+      amount: order.total_price,
+      currency: "INR",
+      status: "created",
+      payment_method: "standard_checkout",
+    });
+  if (paymentRecordError) {
+    console.error("Could not record Razorpay payment:", paymentRecordError.message);
+    const cancelled = await cancelOrderReservation(client, orderId);
+    return jsonResponse({
+      error: cancelled
+        ? "Could not record the payment. Checkout was cancelled and inventory restored."
+        : "Could not record or cancel the payment. Contact support.",
+    }, 500);
+  }
+
   const { error: attachError } = await client.rpc("attach_razorpay_order", {
     p_order_id: orderId,
     p_razorpay_order_id: providerData.id,
@@ -311,6 +332,216 @@ async function createRazorpayOrder(request, body) {
     amount,
     currency: "INR",
   });
+}
+
+async function createRazorpayQr(request, body) {
+  const { client } = await authenticatedClient(request);
+  const { keyId, keySecret } = razorpayCredentials();
+  validateCheckout(body);
+  const couponCode = typeof body.coupon_code === "string" && body.coupon_code.trim()
+    ? body.coupon_code.trim()
+    : null;
+
+  const { data: orderId, error: orderError } = await client.rpc("place_order", {
+    p_customer: body.customer,
+    p_items: body.items,
+    p_payment_method: "razorpay",
+    p_coupon_code: couponCode,
+  });
+  if (orderError || typeof orderId !== "string") {
+    console.error("QR payment reservation failed:", orderError?.message);
+    return jsonResponse({ error: orderError?.message ?? "Could not reserve this order." }, 400);
+  }
+
+  const { data: order, error: readError } = await client
+    .from("orders")
+    .select("id, user_id, total_price, payment_status, status")
+    .eq("id", orderId)
+    .single();
+  if (readError || !order || order.payment_status !== "pending" || order.status !== "pending") {
+    const cancelled = await cancelOrderReservation(client, orderId);
+    return jsonResponse({
+      error: cancelled
+        ? "Could not verify the reserved order. Inventory was restored."
+        : "Could not verify or cancel the reserved order. Contact support.",
+    }, 500);
+  }
+
+  let amount;
+  try {
+    amount = amountInPaise(order.total_price);
+  } catch {
+    const cancelled = await cancelOrderReservation(client, orderId);
+    return jsonResponse({
+      error: cancelled
+        ? "The order amount is invalid. Inventory was restored."
+        : "The order amount is invalid and the reservation could not be cancelled. Contact support.",
+    }, 400);
+  }
+
+  let qrResponse;
+  try {
+    qrResponse = await fetch("https://api.razorpay.com/v1/qr_codes", {
+      method: "POST",
+      headers: {
+        Authorization: razorpayAuthorization(keyId, keySecret),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "upi_qr",
+        name: "E-commerce Store",
+        usage: "single_use",
+        fixed_amount: true,
+        payment_amount: amount,
+        description: `Order ${orderId}`,
+        close_by: Math.floor(Date.now() / 1000) + 30 * 60,
+        notes: { order_id: orderId },
+      }),
+    });
+  } catch (error) {
+    console.error("Could not reach Razorpay QR API:", error);
+    const cancelled = await cancelOrderReservation(client, orderId);
+    return jsonResponse({
+      error: cancelled
+        ? "Could not create a QR code. Inventory was restored."
+        : "Could not create a QR code or cancel the reservation. Contact support.",
+    }, 502);
+  }
+
+  let qr = {};
+  try {
+    qr = await qrResponse.json();
+  } catch {
+    console.error("Razorpay returned a non-JSON QR response.");
+  }
+  if (
+    !qrResponse.ok || typeof qr.id !== "string" ||
+    typeof qr.image_url !== "string" || qr.payment_amount !== amount
+  ) {
+    console.error("Razorpay QR creation failed:", qr?.error?.description);
+    const cancelled = await cancelOrderReservation(client, orderId);
+    return jsonResponse({
+      error: cancelled
+        ? qr?.error?.description ?? "Could not create a QR code. Inventory was restored."
+        : "QR creation failed and the order could not be cancelled. Contact support.",
+    }, 502);
+  }
+
+  const { error: paymentRecordError } = await serviceClient().from("payments").insert({
+    order_id: orderId,
+    user_id: order.user_id,
+    qr_code_id: qr.id,
+    qr_image_url: qr.image_url,
+    amount: order.total_price,
+    currency: "INR",
+    status: "created",
+    payment_method: "upi_qr",
+  });
+  if (paymentRecordError) {
+    console.error("Could not record QR payment:", paymentRecordError.message);
+    let qrClosed = false;
+    try {
+      const closeResponse = await fetch(
+        `https://api.razorpay.com/v1/qr_codes/${encodeURIComponent(qr.id)}/close`,
+        {
+          method: "POST",
+          headers: { Authorization: razorpayAuthorization(keyId, keySecret) },
+        },
+      );
+      const closeData = await closeResponse.json().catch(() => ({}));
+      qrClosed = closeResponse.ok && closeData?.status === "closed";
+    } catch (error) {
+      console.error("Could not close the unrecorded Razorpay QR:", error);
+    }
+    if (!qrClosed) {
+      return jsonResponse({
+        error: "The QR could not be recorded or confirmed closed. Inventory remains reserved; contact support.",
+      }, 500);
+    }
+    const cancelled = await cancelOrderReservation(client, orderId);
+    return jsonResponse({
+      error: cancelled
+        ? "Could not record payment. Checkout was cancelled and inventory was restored."
+        : "Could not record or cancel the QR payment. Contact support.",
+    }, 500);
+  }
+
+  return jsonResponse({
+    success: true,
+    order_id: orderId,
+    qr_code_id: qr.id,
+    image_url: qr.image_url,
+    amount,
+    currency: "INR",
+    close_by: qr.close_by,
+  });
+}
+
+async function getRazorpayPaymentStatus(request, body) {
+  const { userId } = await authenticatedClient(request);
+  const orderId = typeof body?.order_id === "string" ? body.order_id : "";
+  if (!orderId) return jsonResponse({ error: "Order ID is required." }, 400);
+
+  const { data, error } = await serviceClient()
+    .from("payments")
+    .select("status")
+    .eq("order_id", orderId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error || !data) {
+    console.error("Could not read payment status:", error?.message);
+    return jsonResponse({ error: "Payment was not found." }, 404);
+  }
+  return jsonResponse({ success: true, status: data.status });
+}
+
+async function cancelRazorpayQr(request, body) {
+  const { client, userId } = await authenticatedClient(request);
+  const { keyId, keySecret } = razorpayCredentials();
+  const orderId = typeof body?.order_id === "string" ? body.order_id : "";
+  if (!orderId) return jsonResponse({ error: "Order ID is required." }, 400);
+
+  const { data: payment, error } = await serviceClient()
+    .from("payments")
+    .select("qr_code_id, status")
+    .eq("order_id", orderId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error || !payment) {
+    return jsonResponse({ error: "QR payment was not found." }, 404);
+  }
+  if (payment.status !== "created" || typeof payment.qr_code_id !== "string") {
+    return jsonResponse({ error: "This QR payment can no longer be cancelled." }, 409);
+  }
+
+  let closeResponse;
+  try {
+    closeResponse = await fetch(
+      `https://api.razorpay.com/v1/qr_codes/${encodeURIComponent(payment.qr_code_id)}/close`,
+      {
+        method: "POST",
+        headers: { Authorization: razorpayAuthorization(keyId, keySecret) },
+      },
+    );
+  } catch (error) {
+    console.error("Could not close Razorpay QR:", error);
+    return jsonResponse({ error: "Could not close the payment QR. Keep this order open and retry." }, 502);
+  }
+  const closeData = await closeResponse.json().catch(() => ({}));
+  if (!closeResponse.ok || closeData?.status !== "closed") {
+    return jsonResponse({
+      error: "Razorpay did not confirm QR closure. The order was not cancelled.",
+    }, 409);
+  }
+
+  const { error: cancelError } = await client.rpc("cancel_razorpay_order", {
+    p_order_id: orderId,
+  });
+  if (cancelError) {
+    console.error("Could not release cancelled QR order:", cancelError.message);
+    return jsonResponse({ error: "The QR is closed, but inventory restoration failed. Contact support." }, 500);
+  }
+  return jsonResponse({ success: true, status: "cancelled" });
 }
 
 async function verifyRazorpayPayment(request, body) {
@@ -458,6 +689,58 @@ async function confirmPayment({
   return jsonResponse({ success: true, order_id: orderId, status: "paid" });
 }
 
+async function handleQrCodeCredited(event, eventId) {
+  const qrCode = event?.payload?.qr_code?.entity;
+  const payment = event?.payload?.payment?.entity;
+  if (
+    typeof qrCode?.id !== "string" ||
+    typeof payment?.id !== "string" ||
+    payment.status !== "captured" ||
+    payment.currency !== "INR" ||
+    !Number.isSafeInteger(payment.amount)
+  ) {
+    return jsonResponse({ error: "Captured QR payment payload is invalid." }, 400);
+  }
+
+  const admin = serviceClient();
+  const { data: record, error } = await admin
+    .from("payments")
+    .select("order_id, amount, currency")
+    .eq("qr_code_id", qrCode.id)
+    .maybeSingle();
+  if (error || !record) {
+    console.error("QR payment record was not found:", error?.message);
+    return jsonResponse({ error: "QR payment was not found." }, 404);
+  }
+  if (
+    payment.amount !== amountInPaise(record.amount) ||
+    payment.currency !== record.currency
+  ) {
+    return jsonResponse({ error: "QR payment amount does not match the order." }, 400);
+  }
+
+  const { data, error: confirmError } = await admin.rpc("confirm_qr_payment", {
+    p_event_id: eventId,
+    p_order_id: record.order_id,
+    p_qr_code_id: qrCode.id,
+    p_payment_id: payment.id,
+    p_amount: payment.amount,
+    p_currency: payment.currency,
+    p_payment_method: payment.method ?? "upi",
+    p_payload: {
+      payment_id: payment.id,
+      qr_code_id: qrCode.id,
+      status: payment.status,
+      method: payment.method ?? "upi",
+    },
+  });
+  if (confirmError || data?.success !== true) {
+    console.error("Atomic QR payment confirmation failed:", confirmError?.message);
+    return jsonResponse({ error: confirmError?.message ?? "QR payment could not be confirmed." }, 500);
+  }
+  return jsonResponse({ success: true, order_id: record.order_id, status: "paid" });
+}
+
 async function handleRazorpayWebhook(request) {
   const rawBody = await request.text();
   const signature = request.headers.get("x-razorpay-signature") ?? "";
@@ -478,6 +761,9 @@ async function handleRazorpayWebhook(request) {
   }
 
   const event = JSON.parse(rawBody);
+  if (event?.event === "qr_code.credited") {
+    return handleQrCodeCredited(event, eventId);
+  }
   if (event?.event !== "payment.captured") {
     return jsonResponse({ success: true, ignored: true });
   }
@@ -539,6 +825,12 @@ Deno.serve(async (request) => {
         return await placeCashOnDelivery(request, body);
       case "create-razorpay-order":
         return await createRazorpayOrder(request, body);
+      case "create-razorpay-qr":
+        return await createRazorpayQr(request, body);
+      case "razorpay-payment-status":
+        return await getRazorpayPaymentStatus(request, body);
+      case "cancel-razorpay-qr":
+        return await cancelRazorpayQr(request, body);
       case "verify-razorpay-payment":
         return await verifyRazorpayPayment(request, body);
       default:

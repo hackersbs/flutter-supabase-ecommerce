@@ -1170,8 +1170,9 @@ class _SellerScreenState extends State<SellerScreen> {
                                           )
                                           .toList(),
                                       onChanged: (value) {
-                                        if (value == null || value == status)
+                                        if (value == null || value == status) {
                                           return;
+                                        }
                                         provider.updateReturnStatus(
                                           returnId: request['id'].toString(),
                                           status: value,

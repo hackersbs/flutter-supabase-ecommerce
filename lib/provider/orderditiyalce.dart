@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:e_comerce_appliction/utils/error_handling.dart';
+import 'package:e_comerce_appliction/services/notification_service.dart';
 
 class OrderDitiyalce extends ChangeNotifier {
   final SupabaseClient supabase = Supabase.instance.client;
+  RealtimeChannel? _notificationChannel;
   bool isCreating = false;
   bool isLoadingOrders = false;
   bool isLoadingDashboard = false;
@@ -45,10 +47,7 @@ class OrderDitiyalce extends ChangeNotifier {
     try {
       final response = await supabase.rpc(
         'validate_coupon',
-        params: {
-          'p_code': code.trim(),
-          'p_order_amount': orderAmount,
-        },
+        params: {'p_code': code.trim(), 'p_order_amount': orderAmount},
       );
 
       if (response is Map && response['valid'] == true) {
@@ -57,7 +56,9 @@ class OrderDitiyalce extends ChangeNotifier {
         return appliedCoupon;
       } else {
         appliedCoupon = null;
-        final msg = response is Map ? response['message']?.toString() : 'Invalid coupon';
+        final msg = response is Map
+            ? response['message']?.toString()
+            : 'Invalid coupon';
         errorMessage = msg ?? 'Invalid coupon code';
         notifyListeners();
         return null;
@@ -219,6 +220,97 @@ class OrderDitiyalce extends ChangeNotifier {
     } catch (error) {
       errorMessage = providerErrorMessage(error);
       debugPrint('Error verifying Razorpay payment: $error');
+      return false;
+    } finally {
+      notifyListeners();
+    }
+  }
+
+  Future<Map<String, dynamic>?> createRazorpayQrCode({
+    required List<Map<String, dynamic>> products,
+    required Map<String, String> customer,
+    String? couponCode,
+  }) async {
+    final user = supabase.auth.currentUser;
+    if (user == null) {
+      errorMessage = 'Please log in before placing an order.';
+      notifyListeners();
+      return null;
+    }
+
+    isCreating = true;
+    errorMessage = null;
+    notifyListeners();
+
+    try {
+      final response = await supabase.functions.invoke(
+        'supabase-razorpay',
+        body: {
+          'action': 'create-razorpay-qr',
+          'customer': customer,
+          'coupon_code': couponCode ?? appliedCoupon?['code'],
+          'items': products
+              .map(
+                (product) => {
+                  'product_id': product['id'],
+                  'quantity': (product['quantity'] as num?)?.toInt() ?? 1,
+                },
+              )
+              .toList(),
+        },
+      );
+
+      final data = response.data;
+      if (data is! Map || data['success'] != true) {
+        throw Exception(
+          data is Map
+              ? data['error']?.toString() ??
+                    'Could not create the payment QR code.'
+              : 'The payment service returned an invalid response.',
+        );
+      }
+      appliedCoupon = null;
+      return Map<String, dynamic>.from(data);
+    } catch (error) {
+      errorMessage = providerErrorMessage(error);
+      debugPrint('Error creating Razorpay QR code: $error');
+      return null;
+    } finally {
+      isCreating = false;
+      notifyListeners();
+    }
+  }
+
+  Future<String?> razorpayPaymentStatus({required String orderId}) async {
+    try {
+      final response = await supabase.functions.invoke(
+        'supabase-razorpay',
+        body: {'action': 'razorpay-payment-status', 'order_id': orderId},
+      );
+      final data = response.data;
+      if (data is! Map || data['success'] != true) return null;
+      return data['status']?.toString();
+    } catch (error) {
+      debugPrint('Error checking Razorpay payment status: $error');
+      return null;
+    }
+  }
+
+  Future<bool> cancelRazorpayQr({required String orderId}) async {
+    errorMessage = null;
+    try {
+      final response = await supabase.functions.invoke(
+        'supabase-razorpay',
+        body: {'action': 'cancel-razorpay-qr', 'order_id': orderId},
+      );
+      final data = response.data;
+      if (data is Map && data['success'] == true) return true;
+      errorMessage = data is Map
+          ? data['error']?.toString() ?? 'Could not cancel this QR payment.'
+          : 'The payment service returned an invalid response.';
+      return false;
+    } catch (error) {
+      errorMessage = providerErrorMessage(error);
       return false;
     } finally {
       notifyListeners();
@@ -531,5 +623,52 @@ class OrderDitiyalce extends ChangeNotifier {
       notifyListeners();
       return false;
     }
+  }
+
+  Future<void> subscribeToRealtimeNotifications() async {
+    final user = supabase.auth.currentUser;
+    if (user == null || _notificationChannel != null) return;
+
+    _notificationChannel = supabase
+        .channel('public:notifications:${user.id}')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'notifications',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'user_id',
+            value: user.id,
+          ),
+          callback: (payload) {
+            final newRecord = payload.newRecord;
+            if (newRecord.isNotEmpty) {
+              notifications.insert(0, newRecord);
+              notifyListeners();
+
+              final title = newRecord['title']?.toString() ?? 'Order Notification';
+              final message = newRecord['message']?.toString() ?? 'You have a new update.';
+              final orderId = newRecord['order_id']?.toString();
+
+              if (title.toLowerCase().contains('shipped')) {
+                NotificationService.instance.showOrderShipped(orderId: orderId ?? 'Order');
+              } else if (title.toLowerCase().contains('delivered')) {
+                NotificationService.instance.showOrderDelivered(orderId: orderId ?? 'Order');
+              } else {
+                NotificationService.instance.showNotification(
+                  title: title,
+                  body: message,
+                );
+              }
+            }
+          },
+        )
+        .subscribe();
+  }
+
+  @override
+  void dispose() {
+    _notificationChannel?.unsubscribe();
+    super.dispose();
   }
 }

@@ -1,0 +1,105 @@
+{\rtf1\ansi\deff0
+{\fonttbl{\f0 Calibri;}{\f1 Consolas;}}
+\viewkind4\uc1\pard\f0\fs24
+\qc\b Flutter E-Commerce Application - Learning Log\b0\par
+\qc Project study notes\par
+\pard\par
+\b Project overview\b0\par
+This project is a Flutter marketplace with buyer and seller experiences. Flutter and Dart build the mobile interface, Provider manages application state, and Supabase supplies authentication, PostgreSQL data, storage, and realtime updates. The codebase also integrates Razorpay checkout and Supabase Edge Functions.\par
+\par
+\b 1. Application structure\b0\par
+- lib/main.dart initializes dotenv and Supabase, then registers application providers.\par
+- lib/screens contains the buyer and seller interface screens, including product browsing, cart, checkout, messaging, and seller tools.\par
+- lib/provider contains state and service logic. Providers coordinate screen state and communicate with Supabase or platform SDKs.\par
+- lib/utils contains reusable helpers such as currency formatting, pricing, date formatting, and user-facing error translation.\par
+- supabase_schema.sql defines database tables, row-level security policies, triggers, realtime publication, and database functions.\par
+- supabase/functions contains the deployed Edge Function source code.\par
+\par
+\b 2. Checkout and Razorpay\b0\par
+The checkout screen collects delivery details and lets the user choose cash on delivery or Razorpay. The checkout provider sends the cart items and customer details to the Supabase Edge Function named supabase-razorpay. Product prices and inventory must be verified on the server; client-provided totals are not trusted.\par
+\par
+For Razorpay, the server creates a payment order using the private key secret. Flutter opens the Razorpay mobile SDK with the public key ID and server-created order ID. After checkout, the app sends the payment identifiers and signature back to the Edge Function. The function verifies the signature and payment status with Razorpay before asking the database to mark the order paid. A webhook can also report captured payments.\par
+\par
+The SQL place_order function creates the order and order items while locking product rows and reducing inventory as one database operation. This prevents two simultaneous purchases from overselling the same stock. Payment secrets, webhook secrets, and the Supabase service-role key belong only in server-side Edge Function secrets, never in the Flutter app.\par
+\par
+\b 3. Buyer-seller messaging\b0\par
+The Flutter MessageProvider calls the messaging Edge Function to send a message, load a conversation, or fetch recent messages. The function forwards the authenticated user's authorization to the database RPCs send_message, get_messages, and get_recent_messages. The database functions and row-level security policies are responsible for access control. Supabase Realtime helps the app receive conversation updates.\par
+\par
+\b 4. Notifications\b0\par
+Order and return notifications are stored in the database and can be observed by the app. The optional send-fcm Edge Function processes queued push notification records and uses Firebase credentials stored on the server. In-app database and realtime notifications do not require exposing Firebase credentials in the app.\par
+\par
+\b 5. Configuration and security lessons\b0\par
+- The Flutter .env file contains client configuration such as the Supabase project URL, publishable key, and public Razorpay Test Mode key ID.\par
+- A publishable key is not a replacement for row-level security. Protect data with database policies and authenticated operations.\par
+- Never bundle service-role keys, Razorpay key secrets, webhook secrets, or Firebase server credentials in the client app.\par
+- Keep environment files containing real credentials out of source control.\par
+- Validate payment signatures and amounts on a trusted server, not only in the mobile application.\par
+- Review database permissions and Edge Function JWT settings together. The messaging function expects authenticated app requests. The Razorpay endpoint also receives webhooks, so it validates app sessions and webhook signatures separately.\par
+\par
+\b Learning Progress Summary\b0\par
+Over the past few weeks, I have been studying and implementing the topics outlined in the Engineering Guide:\par
+- Dart fundamentals, including async/await and null safety.\par
+- Flutter widgets, layouts, and state management.\par
+- Git branching workflow and Pull Requests.\par
+- SQL basics, including JOIN and GROUP BY.\par
+- Supabase database design and authentication.\par
+- PostgreSQL constraints and normalization.\par
+- Row Level Security (RLS) implementation.\par
+- ACID transactions, atomic updates, and race condition handling.\par
+- Database concurrency control and row locking.\par
+- Payment gateway integration with Razorpay.\par
+- Order processing workflows and status management.\par
+- Security improvements for database operations.\par
+- Firebase Cloud Messaging (FCM) notifications.\par
+- Supabase Realtime and Storage features.\par
+\par
+\b Implemented Features in My Project\b0\par
+- Database integration with Supabase.\par
+- Secure RLS policies.\par
+- Payment gateway integration with Razorpay Test Mode.\par
+- Database row locking and concurrency protection for order stock.\par
+- Security improvements for transaction and payment operations.\par
+- Updated project documentation and README.\par
+\par
+\b 6. Development and validation\b0\par
+Useful project commands:\par
+\f1 flutter pub get\par
+flutter analyze\par
+flutter test\f0\par
+\par
+Widget tests help check UI behavior. Database or integration tests should validate real SQL behavior, especially inventory locking, payment state transitions, and access policies. A simulated concurrency test is useful for understanding the expected result, but it does not replace a test against PostgreSQL.\par
+\par
+\b 7. Topics to study next\b0\par
+1. Flutter widget lifecycle, forms, navigation, and asynchronous work.\par
+2. Provider state management and how providers expose loading, error, and success states.\par
+3. Supabase Auth tokens, row-level security, SQL functions, transactions, and row locks.\par
+4. Edge Function request validation, secret management, error responses, and webhook signature verification.\par
+5. Razorpay order creation, payment capture, callbacks, idempotency, and failed or abandoned payment handling.\par
+6. Unit, widget, and integration testing, with emphasis on testing the real database and payment state transitions safely in Test Mode.\par
+\par
+\b Study references\b0\par
+Project setup and architecture: README.md\par
+Application startup: lib/main.dart\par
+Checkout screen: lib/screens/product_checkout_screen.dart\par
+Razorpay checkout callbacks: lib/provider/razorpayprovider.dart\par
+Order and payment requests: lib/provider/orderditiyalce.dart\par
+Messaging requests: lib/provider/messageprovider.dart\par
+Razorpay Edge Function: supabase/functions/supabase-razorpay/index.ts\par
+Messaging Edge Function: supabase/functions/messaging/index.ts\par
+Database schema and RPCs: supabase_schema.sql\par
+\par
+\b Document style reference\b0\par
+The following CSS was provided as a formatting reference for links and tables:\par
+\f1 a \{\par
+    text-decoration: none;\par
+    color: #464feb;\par
+\}\par
+tr th, tr td \{\par
+    border: 1px solid #e6e6e6;\par
+\}\par
+tr th \{\par
+    background-color: #f5f5f5;\par
+\}\par
+\f0\par
+\i These notes describe the project structure and behavior observed in the repository. Verify deployment settings and database configuration in the Supabase Dashboard before testing live services.\i0\par
+}

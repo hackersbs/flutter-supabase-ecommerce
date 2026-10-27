@@ -8,6 +8,7 @@ import 'package:e_comerce_appliction/provider/themeprovider.dart';
 import 'package:e_comerce_appliction/provider/reviewprovider.dart';
 import 'package:e_comerce_appliction/provider/razorpayprovider.dart';
 import 'package:e_comerce_appliction/screens/flashe_screen.dart';
+import 'package:e_comerce_appliction/services/notification_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
@@ -27,6 +28,7 @@ Future<void> main() async {
         url: supabaseUrl,
         publishableKey: publishableKey,
       );
+      await NotificationService.instance.initialize();
     }
   } catch (error) {
     startupError =
@@ -171,6 +173,8 @@ class MyApp extends StatelessWidget {
     return Consumer<ThemeProvider>(
       builder: (context, themeProvider, child) {
         return MaterialApp(
+          title: 'E-Commerce',
+          scaffoldMessengerKey: NotificationService.messengerKey,
           theme: _buildTheme(dark: false),
           darkTheme: _buildTheme(dark: true),
           themeMode: themeProvider.themeMode,

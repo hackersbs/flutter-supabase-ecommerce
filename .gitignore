@@ -47,7 +47,11 @@ app.*.map.json
 # Widget Preview related
 .widget_preview/
 
-# Local Supabase schema
-/supabase
+# Keep local Supabase state ignored, but track deployable source and migrations.
+/supabase/*
+!/supabase/functions/
+!/supabase/functions/**
+!/supabase/migrations/
+!/supabase/migrations/**
 /.env
 

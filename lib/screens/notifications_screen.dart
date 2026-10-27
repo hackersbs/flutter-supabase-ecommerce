@@ -16,7 +16,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<OrderDitiyalce>().loadNotifications();
+      final provider = context.read<OrderDitiyalce>();
+      provider.loadNotifications();
+      provider.subscribeToRealtimeNotifications();
     });
   }
 

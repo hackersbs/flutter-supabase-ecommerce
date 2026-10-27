@@ -1,0 +1,101 @@
+{\rtf1\ansi\deff0
+{\fonttbl{\f0 Calibri;}}
+{\colortbl;\red70\green79\blue235;}
+\viewkind4\uc1\pard\f0\fs24
+\qc\b Flutter E-Commerce App - Project Study Log\b0\par
+\qc Learning progress, implementation notes, and official references\par
+\pard\par
+\b Project at a glance\b0\par
+This is a Flutter marketplace app with buyer and seller experiences. The mobile UI is written in Dart and Flutter, Provider manages shared app state, and Supabase provides authentication, PostgreSQL data, file storage, and realtime updates. Razorpay Test Mode is used for online checkout. Supabase Edge Functions handle server-side payment and messaging requests.\par
+\par
+\b What the app does\b0\par
+- Buyers can register or sign in, browse and search products, filter listings, read product reviews, manage a cart, and check out with cash on delivery or Razorpay.\par
+- Buyers can track orders, request returns, receive notifications, and message sellers about products or orders.\par
+- Sellers can manage products and inventory, review orders, update fulfillment status, respond to returns, view dashboard information, and message buyers.\par
+- Product images use Supabase Storage. Supabase Realtime supports live message and notification updates.\par
+\par
+\b Project structure\b0\par
+- lib/main.dart loads environment configuration, initializes Supabase, and registers the Provider objects.\par
+- lib/screens/ contains the buyer and seller screens, including checkout, order tracking, messaging, and seller tools.\par
+- lib/provider/ contains app state and service calls. Examples include OrderDitiyalce for orders and RazorpayProvider for payment SDK callbacks.\par
+- lib/utils/ contains shared helpers for pricing, currency, dates, and user-facing errors.\par
+- supabase_schema.sql defines tables, constraints, RLS policies, triggers, realtime configuration, and SQL functions (RPCs).\par
+- supabase/functions/supabase-razorpay/index.ts handles payment orders, verification, and webhooks.\par
+- supabase/functions/messaging/index.ts provides authenticated message actions through database RPCs.\par
+- supabase/functions/send-fcm/index.ts optionally processes queued push notifications.\par
+\par
+\b Main application flows\b0\par
+\b Authentication and access\b0\par
+Supabase Auth identifies the signed-in user. User profiles contain a Buyer or Seller role used by the app to choose the appropriate experience. Row Level Security (RLS) policies are intended to limit database access to permitted records; authentication alone does not replace those policies.\par
+\par
+\b Product and order flow\b0\par
+The cart contains product selections and quantities. At checkout, the app submits customer details and item IDs/quantities. The database place_order function reads current product prices, locks product rows, validates available stock, creates the order and order items, handles an optional coupon, and reduces inventory in a transaction. This server-side operation avoids trusting client-supplied prices and helps prevent overselling.\par
+\par
+\b Razorpay payment flow\b0\par
+For online payment, the app asks supabase-razorpay to create an internal pending order and a Razorpay order. Flutter opens the razorpay_flutter checkout with the public Test Mode key ID and the server-created Razorpay order ID. The app returns the payment ID and signature to the function. The function validates the signature and checks payment details with Razorpay before calling the database confirmation RPC. A Razorpay payment.captured webhook can also confirm a captured payment.\par
+\par
+The Flutter client only needs the public key ID. Razorpay key secrets, webhook secrets, and the Supabase service-role key must remain in Supabase Edge Function secrets. Test Mode should be used for development. Failed or abandoned payment reservations and inventory restoration are important areas to test before production use.\par
+\par
+\b Messaging and notifications\b0\par
+The Flutter message provider calls the messaging function for send, get_messages, and get_recent_messages actions. The function forwards the signed-in user's authorization to the matching database RPCs. Database permissions and RLS remain part of the authorization boundary. Realtime is used to reflect new messages without repeatedly refreshing the conversation.\par
+\par
+Order and return notifications are stored in Supabase. The optional send-fcm function can send queued push notifications when configured with server-side Firebase credentials. In-app notifications and push notifications are related but separate delivery paths.\par
+\par
+\b Learning Progress Summary\b0\par
+Topics studied and applied while working on this app:\par
+- Dart fundamentals, null safety, asynchronous functions, and async/await.\par
+- Flutter widgets, layouts, forms, navigation, and responsive screens.\par
+- Provider-based state management and handling loading, success, and error states.\par
+- Git and repository workflow, including reviewing changes and documenting setup.\par
+- SQL tables, relationships, constraints, joins, and aggregation concepts.\par
+- Supabase Auth, database access, Storage, Edge Functions, and Realtime.\par
+- PostgreSQL normalization, RLS policies, transactions, and row-level locking.\par
+- Checkout and order status workflows, server-side payment verification, and webhook concepts.\par
+- Security practices for client keys, server secrets, authorization, and safe error handling.\par
+- Firebase Cloud Messaging concepts and queued notification delivery.\par
+\par
+\b Implemented and explored in this project\b0\par
+- Supabase-backed authentication, product data, orders, reviews, messaging, and notifications.\par
+- Database RLS policies and authenticated database functions.\par
+- Atomic order placement with current-price checks, stock validation, and product row locks.\par
+- Razorpay Test Mode checkout using a server-created payment order and server-side verification.\par
+- Buyer-seller messaging through a Supabase Edge Function and SQL RPCs.\par
+- Supabase Storage for product image assets and Realtime for message updates.\par
+- Updated README setup instructions and project documentation.\par
+\par
+\b Validation notes\b0\par
+The Flutter test suite was run and passed: 5 tests. Flutter analysis completed with no errors, but reported four informational lint notices, including deprecated radio APIs and existing style/import notices. The order concurrency test in test/order_concurrency_test.dart is a Dart simulation; it does not execute PostgreSQL locks. A database integration test against a disposable Supabase test project would be needed to validate real concurrent transactions and RLS behavior.\par
+\par
+Useful commands from the project root:\par
+\f0 flutter pub get\par
+flutter analyze\par
+flutter test\par
+\par
+\b Official study references\b0\par
+{\field{\*\fldinst{HYPERLINK "https://docs.flutter.dev/"}}{\fldrslt{\ul\cf1 Flutter documentation - widgets, layouts, and app development}}}\par
+{\field{\*\fldinst{HYPERLINK "https://dart.dev/language"}}{\fldrslt{\ul\cf1 Dart language documentation}}}\par
+{\field{\*\fldinst{HYPERLINK "https://dart.dev/language/async"}}{\fldrslt{\ul\cf1 Dart asynchronous programming}}}\par
+{\field{\*\fldinst{HYPERLINK "https://docs.flutter.dev/data-and-backend/state-mgmt/simple"}}{\fldrslt{\ul\cf1 Flutter state management}}}\par
+{\field{\*\fldinst{HYPERLINK "https://supabase.com/docs/guides/getting-started/quickstarts/flutter"}}{\fldrslt{\ul\cf1 Supabase Flutter quickstart}}}\par
+{\field{\*\fldinst{HYPERLINK "https://supabase.com/docs/guides/database/postgres/row-level-security"}}{\fldrslt{\ul\cf1 Supabase Row Level Security}}}\par
+{\field{\*\fldinst{HYPERLINK "https://supabase.com/docs/guides/functions"}}{\fldrslt{\ul\cf1 Supabase Edge Functions}}}\par
+{\field{\*\fldinst{HYPERLINK "https://supabase.com/docs/guides/realtime"}}{\fldrslt{\ul\cf1 Supabase Realtime}}}\par
+{\field{\*\fldinst{HYPERLINK "https://supabase.com/docs/guides/storage"}}{\fldrslt{\ul\cf1 Supabase Storage}}}\par
+{\field{\*\fldinst{HYPERLINK "https://www.postgresql.org/docs/current/ddl-rowsecurity.html"}}{\fldrslt{\ul\cf1 PostgreSQL Row Security Policies}}}\par
+{\field{\*\fldinst{HYPERLINK "https://www.postgresql.org/docs/current/explicit-locking.html"}}{\fldrslt{\ul\cf1 PostgreSQL explicit and row-level locking}}}\par
+{\field{\*\fldinst{HYPERLINK "https://razorpay.com/docs/payments/payment-gateway/flutter-integration/standard/"}}{\fldrslt{\ul\cf1 Razorpay Flutter Standard integration}}}\par
+{\field{\*\fldinst{HYPERLINK "https://razorpay.com/docs/payments/payment-gateway/web-integration/standard/build-integration/"}}{\fldrslt{\ul\cf1 Razorpay standard payment integration concepts}}}\par
+\par
+\b Project study references\b0\par
+Application startup and providers: lib/main.dart\par
+Checkout and payment UI: lib/screens/product_checkout_screen.dart\par
+Razorpay SDK callbacks: lib/provider/razorpayprovider.dart\par
+Order and payment requests: lib/provider/orderditiyalce.dart\par
+Messaging requests: lib/provider/messageprovider.dart\par
+Database schema and RPC definitions: supabase_schema.sql\par
+Razorpay server function: supabase/functions/supabase-razorpay/index.ts\par
+Messaging server function: supabase/functions/messaging/index.ts\par
+Project setup and deployment notes: README.md\par
+\par
+\i Learning note: payment providers, dashboard settings, and third-party APIs may change. Check the official documentation and use Test Mode when validating payment flows.\i0\par
+}

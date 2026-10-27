@@ -168,13 +168,32 @@ class _HomePageContentState extends State<HomePageContent> {
         backgroundColor: isDark
             ? theme.colorScheme.surface
             : theme.colorScheme.primary,
-        title: Text(
-          'E-Commerce',
-          style: TextStyle(
-            fontStyle: FontStyle.italic,
-            fontWeight: FontWeight.bold,
-            color: isDark ? theme.colorScheme.onSurface : Colors.white,
-          ),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.2),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.shopping_bag_outlined,
+                size: 20,
+                color: Colors.white,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'E-Commerce',
+              style: TextStyle(
+                fontStyle: FontStyle.italic,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 0.5,
+                color: isDark ? theme.colorScheme.onSurface : Colors.white,
+              ),
+            ),
+          ],
         ),
         actions: [
           IconButton(
