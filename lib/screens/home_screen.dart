@@ -1,4 +1,5 @@
 import 'package:e_comerce_appliction/provider/productprovider.dart';
+import 'package:e_comerce_appliction/provider/orderditiyalce.dart';
 import 'package:e_comerce_appliction/screens/account_screen.dart';
 import 'package:e_comerce_appliction/screens/cart_screen.dart';
 import 'package:e_comerce_appliction/screens/filter_screen.dart';
@@ -22,6 +23,16 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final orderProvider = context.read<OrderDitiyalce>();
+      orderProvider.loadNotifications();
+      orderProvider.subscribeToRealtimeNotifications();
+    });
+  }
 
   final List<Widget> _screens = const [
     HomePageContent(),

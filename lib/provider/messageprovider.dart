@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:e_comerce_appliction/utils/error_handling.dart';
+import 'package:e_comerce_appliction/services/notification_service.dart';
 
 class MessageContact {
   final String userId;
@@ -24,6 +25,7 @@ class MessageProvider extends ChangeNotifier {
   final SupabaseClient supabase = Supabase.instance.client;
   final List<MessageContact> contacts = [];
   final Map<String, List<Map<String, dynamic>>> _messagesByUser = {};
+  RealtimeChannel? _messageChannel;
   bool isLoading = false;
   String? errorMessage;
 
@@ -197,14 +199,13 @@ class MessageProvider extends ChangeNotifier {
       
       final messagesList = (data['messages'] as List<dynamic>?) ?? [];
       
-      _messagesByUser.clear();
       for (final messageObj in messagesList) {
         final message = Map<String, dynamic>.from(messageObj);
         final otherUser = message['sender_id'] == userId
             ? message['receiver_id']?.toString()
             : message['sender_id']?.toString();
-        if (otherUser != null && !_messagesByUser.containsKey(otherUser)) {
-          _messagesByUser[otherUser] = [message];
+        if (otherUser != null) {
+          _appendMessage(otherUser, message);
         }
       }
       _applyRecentMessages();
@@ -330,4 +331,53 @@ class MessageProvider extends ChangeNotifier {
     });
   }
 
+  /// Subscribes to realtime incoming/outgoing messages
+  Future<void> subscribeToRealtimeMessages() async {
+    final userId = currentUserId;
+    if (userId == null || _messageChannel != null) return;
+
+    _messageChannel = supabase
+        .channel('public:messages:$userId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'messages',
+          callback: (payload) {
+            final newRecord = payload.newRecord;
+            if (newRecord.isEmpty) return;
+
+            final senderId = newRecord['sender_id']?.toString();
+            final receiverId = newRecord['receiver_id']?.toString();
+            final body = newRecord['body']?.toString() ?? '';
+
+            // Only process messages involving the current user
+            if (senderId != userId && receiverId != userId) return;
+
+            final otherUser = senderId == userId ? receiverId : senderId;
+            if (otherUser == null) return;
+
+            _appendMessage(otherUser, Map<String, dynamic>.from(newRecord));
+            _applyRecentMessages();
+            _sortContacts();
+            notifyListeners();
+
+            // If message was sent from someone else to the current user, show in-app notification banner
+            if (senderId != userId) {
+              final senderContact = contacts.where((c) => c.userId == senderId).firstOrNull;
+              final senderName = senderContact?.name ?? 'New Message';
+              NotificationService.instance.showNotification(
+                title: '💬 $senderName',
+                body: body,
+              );
+            }
+          },
+        )
+        .subscribe();
+  }
+
+  @override
+  void dispose() {
+    _messageChannel?.unsubscribe();
+    super.dispose();
+  }
 }

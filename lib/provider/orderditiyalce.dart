@@ -650,14 +650,26 @@ class OrderDitiyalce extends ChangeNotifier {
               final message = newRecord['message']?.toString() ?? 'You have a new update.';
               final orderId = newRecord['order_id']?.toString();
 
-              if (title.toLowerCase().contains('shipped')) {
+              final titleLower = title.toLowerCase();
+              final messageLower = message.toLowerCase();
+
+              if (titleLower.contains('return') || messageLower.contains('return')) {
+                NotificationService.instance.showNotification(
+                  title: title,
+                  body: message,
+                  icon: Icons.assignment_return_outlined,
+                  color: Colors.deepOrange,
+                );
+              } else if (titleLower.contains('shipped') || messageLower.contains('shipped')) {
                 NotificationService.instance.showOrderShipped(orderId: orderId ?? 'Order');
-              } else if (title.toLowerCase().contains('delivered')) {
+              } else if (titleLower.contains('delivered') || messageLower.contains('delivered')) {
                 NotificationService.instance.showOrderDelivered(orderId: orderId ?? 'Order');
               } else {
                 NotificationService.instance.showNotification(
                   title: title,
                   body: message,
+                  icon: Icons.notifications_active,
+                  color: const Color(0xFF2874F0),
                 );
               }
             }

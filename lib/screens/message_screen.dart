@@ -14,7 +14,9 @@ class _MessageScreenState extends State<MessageScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<MessageProvider>().loadContacts();
+      final provider = context.read<MessageProvider>();
+      provider.loadContacts();
+      provider.subscribeToRealtimeMessages();
     });
   }
 
@@ -202,50 +204,61 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final currentUserId = context.read<MessageProvider>().currentUserId;
-    return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            CircleAvatar(
-              radius: 18,
-              backgroundColor: Theme.of(context).colorScheme.surface,
-              foregroundColor: const Color(0xFF2874F0),
-              child: Text(widget.contact.name[0].toUpperCase()),
+    return Consumer<MessageProvider>(
+      builder: (context, provider, child) {
+        final currentUserId = provider.currentUserId;
+        final liveMessages = provider.conversationFor(widget.contact.userId);
+        final messages = liveMessages.isNotEmpty ? liveMessages : _messages;
+
+        // Auto-scroll on new message
+        if (messages.length != _messages.length) {
+          _messages = messages;
+          _scrollToBottom();
+        }
+
+        return Scaffold(
+          appBar: AppBar(
+            title: Row(
+              children: [
+                CircleAvatar(
+                  radius: 18,
+                  backgroundColor: Theme.of(context).colorScheme.surface,
+                  foregroundColor: const Color(0xFF2874F0),
+                  child: Text(widget.contact.name[0].toUpperCase()),
+                ),
+                const SizedBox(width: 10),
+                Flexible(
+                  child: Text(widget.contact.name, overflow: TextOverflow.ellipsis),
+                ),
+              ],
             ),
-            const SizedBox(width: 10),
-            Flexible(
-              child: Text(widget.contact.name, overflow: TextOverflow.ellipsis),
-            ),
-          ],
-        ),
-        backgroundColor: const Color(0xFF2874F0),
-        foregroundColor: Colors.white,
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _messages.isEmpty
-                ? const Center(child: Text('Start the conversation'))
-                : ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(12),
-                    itemCount: _messages.length,
-                    itemBuilder: (context, index) {
-                      final message = _messages[index];
-                      final isMine = message['sender_id'] == currentUserId;
-                      return _MessageBubble(
-                        text: message['body']?.toString() ?? '',
-                        isMine: isMine,
-                        createdAt: DateTime.tryParse(
-                          message['created_at']?.toString() ?? '',
-                        ),
-                      );
-                    },
-                  ),
+            backgroundColor: const Color(0xFF2874F0),
+            foregroundColor: Colors.white,
           ),
+          body: Column(
+            children: [
+              Expanded(
+                child: _isLoading && messages.isEmpty
+                    ? const Center(child: CircularProgressIndicator())
+                    : messages.isEmpty
+                        ? const Center(child: Text('Start the conversation'))
+                        : ListView.builder(
+                            controller: _scrollController,
+                            padding: const EdgeInsets.all(12),
+                            itemCount: messages.length,
+                            itemBuilder: (context, index) {
+                              final message = messages[index];
+                              final isMine = message['sender_id'] == currentUserId;
+                              return _MessageBubble(
+                                text: message['body']?.toString() ?? '',
+                                isMine: isMine,
+                                createdAt: DateTime.tryParse(
+                                  message['created_at']?.toString() ?? '',
+                                ),
+                              );
+                            },
+                          ),
+              ),
           SafeArea(
             top: false,
             child: Padding(
@@ -293,6 +306,8 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ],
       ),
+    );
+      },
     );
   }
 }

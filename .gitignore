@@ -54,4 +54,9 @@ app.*.map.json
 !/supabase/migrations/
 !/supabase/migrations/**
 /.env
+/log_updated.doc
+/log.doc
+/NOTIFICATION_AND_SETUP_GUIDE.md
+/project_study_log.doc
+
 

@@ -491,7 +491,10 @@ with check (
   )
 );
 
--- Removed read policy as it is handled by edge function and RPC
+-- Users can read messages where they are the sender or receiver (Required for Supabase Realtime streaming)
+create policy "Users can read own messages"
+on public.messages for select to authenticated
+using (auth.uid() = sender_id or auth.uid() = receiver_id);
 
 create policy "Users can mark received messages read"
 on public.messages for update to authenticated
@@ -1364,6 +1367,64 @@ drop trigger if exists trg_order_notifications on public.orders;
 create trigger trg_order_notifications
 after insert or update on public.orders
 for each row execute procedure public.trigger_order_notifications();
+
+-- =========================================================
+-- TRIGGER: Real-Time Notifications for Return Requests
+-- =========================================================
+create or replace function public.trigger_return_notifications()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if tg_op = 'INSERT' then
+    -- When a buyer requests a return, notify the seller
+    insert into public.notifications (user_id, order_id, title, message)
+    values (
+      new.seller_id,
+      new.order_id,
+      'New Return Requested',
+      'A buyer has requested a return for one of your order items.'
+    );
+
+    insert into public.push_notification_logs (user_id, order_id, title, body, data)
+    values (
+      new.seller_id,
+      new.order_id,
+      'New Return Requested',
+      'A buyer has requested a return for one of your order items.',
+      jsonb_build_object('order_id', new.order_id, 'type', 'return_request', 'return_id', new.id)
+    );
+
+  elsif tg_op = 'UPDATE' and old.status is distinct from new.status then
+    -- When seller approves/rejects the return, notify the buyer
+    insert into public.notifications (user_id, order_id, title, message)
+    values (
+      new.buyer_id,
+      new.order_id,
+      format('Return Status: %s', initcap(new.status)),
+      format('Your return request has been marked as %s.', new.status)
+    );
+
+    insert into public.push_notification_logs (user_id, order_id, title, body, data)
+    values (
+      new.buyer_id,
+      new.order_id,
+      format('Return Status: %s', initcap(new.status)),
+      format('Your return request is now %s.', new.status),
+      jsonb_build_object('order_id', new.order_id, 'type', 'return_status', 'status', new.status, 'return_id', new.id)
+    );
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_return_notifications on public.return_requests;
+create trigger trg_return_notifications
+after insert or update on public.return_requests
+for each row execute procedure public.trigger_return_notifications();
 
 -- Enable Supabase Realtime for instant in-app notification streaming
 alter table public.notifications replica identity full;

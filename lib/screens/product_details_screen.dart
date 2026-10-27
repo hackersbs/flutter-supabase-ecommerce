@@ -145,14 +145,15 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
     final result = await showModalBottomSheet<(int, String)?>(
       context: context,
       isScrollControlled: true,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setSheetState) {
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (dialogContext, setSheetState) {
+          final bottomInset = MediaQuery.viewInsetsOf(dialogContext).bottom;
           return Padding(
             padding: EdgeInsets.fromLTRB(
               20,
               20,
               20,
-              20 + MediaQuery.viewInsetsOf(context).bottom,
+              20 + bottomInset,
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -195,8 +196,9 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                   width: double.infinity,
                   child: FilledButton(
                     onPressed: () {
-                      if (commentController.text.trim().isEmpty) return;
-                      Navigator.pop(context, (rating, commentController.text));
+                      final text = commentController.text.trim();
+                      if (text.isEmpty) return;
+                      Navigator.of(sheetContext).pop((rating, text));
                     },
                     child: Text(
                       existing == null ? 'Post review' : 'Save changes',
@@ -209,7 +211,9 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
         },
       ),
     );
-    commentController.dispose();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      commentController.dispose();
+    });
     if (result == null || !mounted) return;
     final productId = widget.product['id']?.toString();
     if (productId == null) return;
