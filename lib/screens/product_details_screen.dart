@@ -112,16 +112,14 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
     final cartProvider = context.read<CardeProvider>();
     final added = await cartProvider.addToCart(widget.product);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          added
-              ? 'Product added to cart'
-              : cartProvider.errorMessage ?? 'Product could not be added',
+    if (!added && cartProvider.errorMessage != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(cartProvider.errorMessage!),
+          duration: const Duration(seconds: 2),
         ),
-        duration: const Duration(seconds: 1),
-      ),
-    );
+      );
+    }
   }
 
   void _buyNow() {
@@ -192,18 +190,46 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                   ),
                 ),
                 const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton(
-                    onPressed: () {
-                      final text = commentController.text.trim();
-                      if (text.isEmpty) return;
-                      Navigator.of(sheetContext).pop((rating, text));
-                    },
-                    child: Text(
-                      existing == null ? 'Post review' : 'Save changes',
+                Row(
+                  children: [
+                    if (existing != null) ...[
+                      IconButton(
+                        tooltip: 'Delete review',
+                        onPressed: () async {
+                          Navigator.of(sheetContext).pop(null);
+                          final productId = widget.product['id']?.toString();
+                          if (productId != null) {
+                            final deleted = await provider.deleteReview(productId);
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    deleted
+                                        ? 'Review deleted.'
+                                        : provider.errorMessage ?? 'Could not delete review.',
+                                  ),
+                                ),
+                              );
+                            }
+                          }
+                        },
+                        icon: const Icon(Icons.delete_outline, color: Colors.red),
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: () {
+                          final text = commentController.text.trim();
+                          if (text.isEmpty) return;
+                          Navigator.of(sheetContext).pop((rating, text));
+                        },
+                        child: Text(
+                          existing == null ? 'Post review' : 'Save changes',
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
               ],
             ),
@@ -227,9 +253,10 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
       SnackBar(
         content: Text(
           saved
-              ? 'Review saved'
-              : provider.errorMessage ?? 'Only buyers can review this product.',
+              ? 'Review saved successfully! ⭐'
+              : provider.errorMessage ?? 'Could not save review. Please try again.',
         ),
+        backgroundColor: saved ? const Color(0xFF2E7D32) : Colors.red.shade700,
       ),
     );
   }

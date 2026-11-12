@@ -158,10 +158,19 @@ async function cancelOrderReservation(client, orderId) {
   return true;
 }
 
+function sanitizeCouponCode(code) {
+  if (typeof code !== "string" || !code.trim()) return null;
+  const clean = code.trim().toUpperCase();
+  if (!/^[A-Z0-9_-]{2,30}$/.test(clean)) {
+    throw new Error("Invalid coupon code format.");
+  }
+  return clean;
+}
+
 async function placeCashOnDelivery(request, body) {
   const { client } = await authenticatedClient(request);
   validateCheckout(body);
-  const couponCode = typeof body.coupon_code === "string" && body.coupon_code.trim() ? body.coupon_code.trim() : null;
+  const couponCode = sanitizeCouponCode(body.coupon_code);
   const { data, error } = await client.rpc("place_order", {
     p_customer: body.customer,
     p_items: body.items,
@@ -182,7 +191,7 @@ async function createRazorpayOrder(request, body) {
   const { client } = await authenticatedClient(request);
   const { keyId, keySecret } = razorpayCredentials();
   validateCheckout(body);
-  const couponCode = typeof body.coupon_code === "string" && body.coupon_code.trim() ? body.coupon_code.trim() : null;
+  const couponCode = sanitizeCouponCode(body.coupon_code);
 
   const { data: orderId, error: orderError } = await client.rpc("place_order", {
     p_customer: body.customer,
@@ -331,16 +340,231 @@ async function createRazorpayOrder(request, body) {
     razorpay_order_id: providerData.id,
     amount,
     currency: "INR",
+    key_id: keyId,
   });
+}
+
+async function resumeRazorpayOrder(request, body) {
+  const { client, userId } = await authenticatedClient(request);
+  const { keyId, keySecret } = razorpayCredentials();
+  const orderId = typeof body?.order_id === "string" ? body.order_id : "";
+  if (!orderId) {
+    return jsonResponse({ error: "Order ID is required." }, 400);
+  }
+
+  const { data: order, error: readError } = await client
+    .from("orders")
+    .select("id, user_id, customer_name, customer_email, customer_phone, total_price, payment_method, payment_status, status, razorpay_order_id")
+    .eq("id", orderId)
+    .eq("user_id", userId)
+    .single();
+
+  if (readError || !order) {
+    return jsonResponse({ error: "Order not found." }, 404);
+  }
+
+  if (order.status !== "pending" || order.payment_status !== "pending") {
+    return jsonResponse({ error: "This order is not awaiting payment." }, 400);
+  }
+
+  const amount = amountInPaise(order.total_price);
+  let razorpayOrderId = order.razorpay_order_id;
+
+  if (!razorpayOrderId) {
+    const providerResponse = await fetch("https://api.razorpay.com/v1/orders", {
+      method: "POST",
+      headers: {
+        Authorization: razorpayAuthorization(keyId, keySecret),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        amount,
+        currency: "INR",
+        receipt: orderId,
+        notes: { order_id: orderId },
+      }),
+    });
+    const providerData = await providerResponse.json().catch(() => ({}));
+    if (!providerResponse.ok || typeof providerData.id !== "string") {
+      return jsonResponse({ error: providerData?.error?.description ?? "Could not create Razorpay order." }, 502);
+    }
+    razorpayOrderId = providerData.id;
+
+    await serviceClient().from("payments").upsert({
+      order_id: orderId,
+      user_id: userId,
+      razorpay_order_id: razorpayOrderId,
+      amount: order.total_price,
+      currency: "INR",
+      status: "created",
+      payment_method: "standard_checkout",
+    }, { onConflict: "order_id" });
+
+    await client.rpc("attach_razorpay_order", {
+      p_order_id: orderId,
+      p_razorpay_order_id: razorpayOrderId,
+    });
+  }
+
+  return jsonResponse({
+    success: true,
+    order_id: orderId,
+    razorpay_order_id: razorpayOrderId,
+    amount,
+    currency: "INR",
+    key_id: keyId,
+    customer: {
+      name: order.customer_name,
+      email: order.customer_email,
+      phone: order.customer_phone,
+    },
+  });
+}
+
+async function resumeRazorpayQr(request, body) {
+  const { client, userId } = await authenticatedClient(request);
+  const { keyId, keySecret } = razorpayCredentials();
+  const orderId = typeof body?.order_id === "string" ? body.order_id : "";
+  if (!orderId) {
+    return jsonResponse({ error: "Order ID is required." }, 400);
+  }
+
+  const { data: order, error: readError } = await client
+    .from("orders")
+    .select("id, user_id, total_price, payment_method, payment_status, status")
+    .eq("id", orderId)
+    .eq("user_id", userId)
+    .single();
+
+  if (readError || !order || order.status !== "pending" || order.payment_status !== "pending") {
+    return jsonResponse({ error: "Order is not awaiting payment." }, 400);
+  }
+
+  const amount = amountInPaise(order.total_price);
+
+  const { data: payment } = await serviceClient()
+    .from("payments")
+    .select("qr_code_id, qr_image_url, status")
+    .eq("order_id", orderId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (payment?.qr_code_id && payment?.qr_image_url && payment?.status === "created") {
+    return jsonResponse({
+      success: true,
+      order_id: orderId,
+      qr_code_id: payment.qr_code_id,
+      image_url: payment.qr_image_url,
+      amount,
+      currency: "INR",
+    });
+  }
+
+  const qrResponse = await fetch("https://api.razorpay.com/v1/qr_codes", {
+    method: "POST",
+    headers: {
+      Authorization: razorpayAuthorization(keyId, keySecret),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      type: "upi_qr",
+      name: "E-commerce Store",
+      usage: "single_use",
+      fixed_amount: true,
+      payment_amount: amount,
+      description: `Order ${orderId}`,
+      close_by: Math.floor(Date.now() / 1000) + 30 * 60,
+      notes: { order_id: orderId },
+    }),
+  });
+
+  const qr = await qrResponse.json().catch(() => ({}));
+  if (!qrResponse.ok || typeof qr.id !== "string" || typeof qr.image_url !== "string") {
+    return jsonResponse({ error: qr?.error?.description ?? "Could not create QR code." }, 502);
+  }
+
+  await serviceClient().from("payments").upsert({
+    order_id: orderId,
+    user_id: userId,
+    qr_code_id: qr.id,
+    qr_image_url: qr.image_url,
+    amount: order.total_price,
+    currency: "INR",
+    status: "created",
+    payment_method: "upi_qr",
+  }, { onConflict: "order_id" });
+
+  return jsonResponse({
+    success: true,
+    order_id: orderId,
+    qr_code_id: qr.id,
+    image_url: qr.image_url,
+    amount,
+    currency: "INR",
+    close_by: qr.close_by,
+  });
+}
+
+async function simulateTestQrPayment(request, body) {
+  const { userId } = await authenticatedClient(request);
+  const { keyId } = razorpayCredentials();
+  if (!keyId.startsWith("rzp_test_")) {
+    return jsonResponse({ error: "Simulating QR payments is only allowed in Test Mode." }, 403);
+  }
+
+  const orderId = typeof body?.order_id === "string" ? body.order_id : "";
+  if (!orderId) return jsonResponse({ error: "Order ID is required." }, 400);
+
+  const admin = serviceClient();
+  const { data: record, error } = await admin
+    .from("payments")
+    .select("order_id, qr_code_id, amount, currency, status")
+    .eq("order_id", orderId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error || !record || !record.qr_code_id) {
+    return jsonResponse({ error: "QR payment record not found." }, 404);
+  }
+
+  if (record.status === "paid") {
+    return jsonResponse({ success: true, status: "paid", already_processed: true });
+  }
+
+  const simulatedPaymentId = `pay_sim_${Date.now()}`;
+  const simulatedEventId = `evt_sim_${Date.now()}`;
+  const amount = amountInPaise(record.amount);
+
+  const { data, error: confirmError } = await admin.rpc("confirm_qr_payment", {
+    p_event_id: simulatedEventId,
+    p_order_id: orderId,
+    p_qr_code_id: record.qr_code_id,
+    p_payment_id: simulatedPaymentId,
+    p_amount: amount,
+    p_currency: record.currency,
+    p_payment_method: "upi_simulated_test",
+    p_payload: {
+      payment_id: simulatedPaymentId,
+      qr_code_id: record.qr_code_id,
+      status: "captured",
+      test_simulated: true,
+    },
+  });
+
+  if (confirmError || data?.success !== true) {
+    console.error("Simulation failed:", confirmError?.message);
+    return jsonResponse({ error: confirmError?.message ?? "Simulation failed." }, 500);
+  }
+
+  await ensurePaymentNotifications(admin, orderId, simulatedPaymentId);
+  return jsonResponse({ success: true, order_id: orderId, status: "paid" });
 }
 
 async function createRazorpayQr(request, body) {
   const { client } = await authenticatedClient(request);
   const { keyId, keySecret } = razorpayCredentials();
   validateCheckout(body);
-  const couponCode = typeof body.coupon_code === "string" && body.coupon_code.trim()
-    ? body.coupon_code.trim()
-    : null;
+  const couponCode = sanitizeCouponCode(body.coupon_code);
 
   const { data: orderId, error: orderError } = await client.rpc("place_order", {
     p_customer: body.customer,
@@ -907,6 +1131,12 @@ Deno.serve(async (request) => {
         return await createRazorpayOrder(request, body);
       case "create-razorpay-qr":
         return await createRazorpayQr(request, body);
+      case "resume-razorpay-order":
+        return await resumeRazorpayOrder(request, body);
+      case "resume-razorpay-qr":
+        return await resumeRazorpayQr(request, body);
+      case "simulate-test-qr-payment":
+        return await simulateTestQrPayment(request, body);
       case "razorpay-payment-status":
         return await getRazorpayPaymentStatus(request, body);
       case "cancel-razorpay-qr":

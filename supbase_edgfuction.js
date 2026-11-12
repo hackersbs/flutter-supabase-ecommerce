@@ -20,6 +20,17 @@ serve(async (req) => {
       );
     }
 
+    let sanitizedCoupon = null;
+    if (typeof coupon_code === 'string' && coupon_code.trim()) {
+      sanitizedCoupon = coupon_code.trim().toUpperCase();
+      if (!/^[A-Z0-9_-]{2,30}$/.test(sanitizedCoupon)) {
+        return new Response(
+          JSON.stringify({ error: 'Invalid coupon code format.' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+        );
+      }
+    }
+
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_ANON_KEY') ?? '',
@@ -31,7 +42,7 @@ serve(async (req) => {
       p_customer: customer,
       p_items: items,
       p_payment_method: payment_method || 'cash_on_delivery',
-      p_coupon_code: coupon_code || null,
+      p_coupon_code: sanitizedCoupon,
     });
 
     if (error) {

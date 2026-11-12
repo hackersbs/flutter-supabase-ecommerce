@@ -379,13 +379,18 @@ as $$
       select 1 from public.users u
       where u.id = target_user_id and u.role = 'Seller'
     )
+    -- Public view of reviewers (so users can see who wrote the reviews)
+    or exists (
+      select 1 from public.product_reviews pr
+      where pr.user_id = target_user_id
+    )
   );
 $$;
 revoke all on function public.can_read_user_profile(uuid) from public;
-grant execute on function public.can_read_user_profile(uuid) to authenticated;
+grant execute on function public.can_read_user_profile(uuid) to authenticated, anon;
 
 create policy "Strict profile access control"
-on public.users for select to authenticated
+on public.users for select to authenticated, anon
 using (public.can_read_user_profile(id));
 create policy "Users can update own profile"
 on public.users for update to authenticated
@@ -403,21 +408,12 @@ create policy "Sellers can delete own products"
 on public.product for delete to authenticated
 using (auth.uid() = user_id);
 
-create policy "Authenticated users can read product reviews"
-on public.product_reviews for select to authenticated using (true);
+create policy "Anyone can read product reviews"
+on public.product_reviews for select to authenticated, anon using (true);
 
-create policy "Buyers can create reviews for purchased products"
+create policy "Authenticated users can create reviews"
 on public.product_reviews for insert to authenticated
-with check (
-  auth.uid() = user_id
-  and exists (
-    select 1
-    from public.orders o
-    join public.order_items oi on oi.order_id = o.id
-    where o.user_id = auth.uid()
-      and oi.product_id = product_reviews.product_id
-  )
-);
+with check (auth.uid() = user_id);
 
 create policy "Users can update own product reviews"
 on public.product_reviews for update to authenticated
@@ -778,6 +774,10 @@ begin
 
   -- Atomic Server-Side Coupon Verification and Redemption
   if v_clean_code <> '' then
+    if v_clean_code !~ '^[A-Z0-9_-]{2,30}$' then
+      raise exception 'Invalid coupon code format';
+    end if;
+
     select * into v_coupon
     from public.coupons
     where upper(code) = v_clean_code and is_active = true
@@ -826,60 +826,65 @@ begin
   update public.orders set total_price = v_final_total, updated_at = now()
   where id = v_order_id;
 
-  -- 1. Notify buyer about order placement
-  insert into public.notifications (user_id, order_id, title, message)
-  values (
-    v_user_id,
-    v_order_id,
-    'Order Placed Successfully! 🛍️',
-    format('Your order #%s has been placed for ₹%s (%s).', substr(v_order_id::text, 1, 8), v_final_total, p_payment_method)
-  );
-
-  insert into public.push_notification_logs (user_id, order_id, title, body, data)
-  values (
-    v_user_id,
-    v_order_id,
-    'Order Placed Successfully! 🛍️',
-    format('Your order #%s has been placed for ₹%s.', substr(v_order_id::text, 1, 8), v_final_total),
-    jsonb_build_object('order_id', v_order_id, 'type', 'new_order')
-  );
-
-  -- 2. Notify each distinct seller involved with products & buyer details
-  for v_seller in
-    select seller_id, string_agg(product_name || ' (x' || quantity || ')', ', ') as products
-    from public.order_items
-    where order_id = v_order_id
-    group by seller_id
-  loop
+  -- Notifications are sent immediately ONLY for Cash On Delivery.
+  -- For online payments (Razorpay standard checkout / UPI), notifications are dispatched
+  -- ONLY AFTER payment is successfully verified and confirmed!
+  if p_payment_method = 'cash_on_delivery' then
+    -- 1. Notify buyer about order placement
     insert into public.notifications (user_id, order_id, title, message)
     values (
-      v_seller.seller_id,
+      v_user_id,
       v_order_id,
-      'New Order Received! 🔔',
-      format('Buyer %s (ID: %s) placed order #%s for ₹%s (%s). Products: %s',
-        coalesce(p_customer->>'name', 'Customer'),
-        v_user_id,
-        substr(v_order_id::text, 1, 8),
-        v_final_total,
-        p_payment_method,
-        v_seller.products
-      )
+      'Order Placed Successfully! 🛍️',
+      format('Your order #%s has been placed for ₹%s (%s).', substr(v_order_id::text, 1, 8), v_final_total, p_payment_method)
     );
 
     insert into public.push_notification_logs (user_id, order_id, title, body, data)
     values (
-      v_seller.seller_id,
+      v_user_id,
       v_order_id,
-      'New Order Received! 🔔',
-      format('Buyer %s (ID: %s) ordered %s for ₹%s.',
-        coalesce(p_customer->>'name', 'Customer'),
-        v_user_id,
-        v_seller.products,
-        v_final_total
-      ),
-      jsonb_build_object('order_id', v_order_id, 'type', 'new_order', 'buyer_id', v_user_id)
+      'Order Placed Successfully! 🛍️',
+      format('Your order #%s has been placed for ₹%s.', substr(v_order_id::text, 1, 8), v_final_total),
+      jsonb_build_object('order_id', v_order_id, 'type', 'new_order')
     );
-  end loop;
+
+    -- 2. Notify each distinct seller involved with products & buyer details
+    for v_seller in
+      select seller_id, string_agg(product_name || ' (x' || quantity || ')', ', ') as products
+      from public.order_items
+      where order_id = v_order_id
+      group by seller_id
+    loop
+      insert into public.notifications (user_id, order_id, title, message)
+      values (
+        v_seller.seller_id,
+        v_order_id,
+        'New Order Received! 🔔',
+        format('Buyer %s (ID: %s) placed order #%s for ₹%s (%s). Products: %s',
+          coalesce(p_customer->>'name', 'Customer'),
+          v_user_id,
+          substr(v_order_id::text, 1, 8),
+          v_final_total,
+          p_payment_method,
+          v_seller.products
+        )
+      );
+
+      insert into public.push_notification_logs (user_id, order_id, title, body, data)
+      values (
+        v_seller.seller_id,
+        v_order_id,
+        'New Order Received! 🔔',
+        format('Buyer %s (ID: %s) ordered %s for ₹%s.',
+          coalesce(p_customer->>'name', 'Customer'),
+          v_user_id,
+          v_seller.products,
+          v_final_total
+        ),
+        jsonb_build_object('order_id', v_order_id, 'type', 'new_order', 'buyer_id', v_user_id)
+      );
+    end loop;
+  end if;
 
   return v_order_id;
 end;
@@ -1137,6 +1142,14 @@ begin
     return jsonb_build_object('valid', false, 'message', 'Coupon code cannot be empty');
   end if;
 
+  if v_clean_code !~ '^[A-Z0-9_-]{2,30}$' then
+    return jsonb_build_object('valid', false, 'message', 'Invalid coupon code format');
+  end if;
+
+  if p_order_amount is null or p_order_amount <= 0 then
+    return jsonb_build_object('valid', false, 'message', 'Order amount must be greater than zero');
+  end if;
+
   select * into v_coupon
   from public.coupons
   where upper(code) = v_clean_code and is_active = true;
@@ -1176,6 +1189,9 @@ begin
     v_discount := least(p_order_amount, v_coupon.discount_value);
   end if;
 
+  -- Safety: discount cannot exceed order subtotal
+  v_discount := least(p_order_amount, v_discount);
+
   return jsonb_build_object(
     'valid', true,
     'code', v_coupon.code,
@@ -1183,6 +1199,7 @@ begin
     'discount_type', v_coupon.discount_type,
     'discount_value', v_coupon.discount_value,
     'discount_amount', v_discount,
+    'discount', v_discount,
     'message', format('Coupon applied! You save ₹%s', v_discount)
   );
 end;
@@ -1255,24 +1272,26 @@ declare
   v_item record;
   v_rows_updated integer;
 begin
-  if auth.uid() is null then
-    raise exception 'You must be logged in to cancel payment';
-  end if;
-
   select * into v_order
   from public.orders
-  where id = p_order_id and user_id = auth.uid()
+  where id = p_order_id
   for update;
+
   if not found then
     raise exception 'Order not found';
   end if;
-  if v_order.payment_method <> 'razorpay'
-     or v_order.status <> 'pending'
-     or v_order.payment_status <> 'pending'
-     or v_order.razorpay_order_id is not null then
-    raise exception 'Order cannot be safely cancelled';
+
+  -- Ensure only the order owner or service_role can cancel
+  if auth.uid() is not null and v_order.user_id <> auth.uid() then
+    raise exception 'You do not have permission to cancel this order';
   end if;
 
+  -- Safety check: only pending, unpaid orders can be cancelled and have inventory restored
+  if v_order.status <> 'pending' or v_order.payment_status <> 'pending' then
+    raise exception 'Order is no longer pending and cannot be cancelled';
+  end if;
+
+  -- 1. Restore product inventory atomically
   for v_item in
     select product_id, sum(quantity)::integer as quantity
     from public.order_items
@@ -1284,22 +1303,19 @@ begin
     set quantity = quantity + v_item.quantity,
         updated_at = now()
     where id = v_item.product_id;
-    get diagnostics v_rows_updated = row_count;
-    if v_rows_updated <> 1 then
-      raise exception 'Could not restore inventory for cancelled payment';
-    end if;
   end loop;
 
-  -- Restore coupon if one was applied
+  -- 2. Restore coupon if one was applied
   update public.coupons
   set used_quantity = greatest(0, used_quantity - 1)
   where id in (
     select coupon_id from public.coupon_redemptions
-    where order_id = p_order_id and user_id = auth.uid()
+    where order_id = p_order_id
   );
   delete from public.coupon_redemptions
-  where order_id = p_order_id and user_id = auth.uid();
+  where order_id = p_order_id;
 
+  -- 3. Mark order as cancelled / payment failed
   update public.orders
   set status = 'cancelled',
       payment_status = 'failed',
@@ -1310,7 +1326,7 @@ begin
 end;
 $$;
 revoke all on function public.cancel_razorpay_order(uuid) from public;
-grant execute on function public.cancel_razorpay_order(uuid) to authenticated;
+grant execute on function public.cancel_razorpay_order(uuid) to authenticated, service_role;
 
 drop function if exists public.verify_and_confirm_payment(uuid, text, text, text);
 create or replace function public.verify_and_confirm_payment(
@@ -1766,7 +1782,9 @@ insert into public.coupons (
 ) values
   ('WELCOME50', '50% Welcome Discount', 'Get 50% discount up to ₹200 on your purchase', 'percentage', 50, 300, 200, 100, 0, true),
   ('FLAT100', 'Flat ₹100 Off', 'Save flat ₹100 on orders above ₹500', 'fixed', 100, 500, null, 50, 0, true),
-  ('SAVE10', '10% Saver Offer', '10% discount on all items above ₹200', 'percentage', 10, 200, 150, 200, 0, true)
+  ('SAVE10', '10% Saver Offer', '10% discount on all items above ₹200', 'percentage', 10, 200, 150, 200, 0, true),
+  ('SUPER20', '20% Mega Deal', 'Get 20% discount up to ₹100 on orders above ₹250', 'percentage', 20, 250, 100, 100, 0, true),
+  ('FREESHIP', 'Free Shipping Offer', 'Save ₹40 delivery fee on orders above ₹150', 'fixed', 40, 150, null, 100, 0, true)
 on conflict (code) do update set
   title = excluded.title,
   description = excluded.description,

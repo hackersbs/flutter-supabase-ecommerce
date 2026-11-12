@@ -905,11 +905,23 @@ class _SellerScreenState extends State<SellerScreen> {
                                     Text(
                                       'Total: ${formatIndianRupees(item['item_total'])}',
                                     ),
-                                    const Text(
-                                      'Payment: Cash on delivery',
-                                      style: TextStyle(
-                                        color: Colors.deepOrange,
-                                      ),
+                                    Builder(
+                                      builder: (context) {
+                                        final pMethod = order['payment_method']?.toString().toLowerCase() ?? '';
+                                        final isOnline = pMethod.contains('razorpay');
+                                        final isPaid = order['payment_status']?.toString().toLowerCase() == 'paid';
+                                        return Text(
+                                          isOnline
+                                              ? (isPaid ? 'Payment: Razorpay (Paid) ✅' : 'Payment: Razorpay (Pending)')
+                                              : 'Payment: Cash on delivery',
+                                          style: TextStyle(
+                                            color: isOnline
+                                                ? (isPaid ? const Color(0xFF2E7D32) : Colors.orange.shade800)
+                                                : Colors.deepOrange,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        );
+                                      },
                                     ),
                                     Text(
                                       'Placed on ${formatOrderDateTime(context, order['created_at'])}',
@@ -1010,6 +1022,7 @@ class _SellerScreenState extends State<SellerScreen> {
 
   static const _statusOptions = [
     'pending',
+    'paid',
     'packed',
     'shipped',
     'out for delivery',

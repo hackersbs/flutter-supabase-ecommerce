@@ -38,13 +38,20 @@ class ReviewProvider extends ChangeNotifier {
           .toList();
       final names = <String, String>{};
       if (userIds.isNotEmpty) {
-        final profiles = await supabase
-            .from('users')
-            .select('id, name')
-            .inFilter('id', userIds);
-        for (final profile in profiles) {
-          final id = profile['id']?.toString();
-          if (id != null) names[id] = profile['name']?.toString() ?? 'Buyer';
+        try {
+          final profiles = await supabase
+              .from('users')
+              .select('id, name')
+              .inFilter('id', userIds);
+          for (final profile in profiles) {
+            final id = profile['id']?.toString();
+            final name = profile['name']?.toString().trim();
+            if (id != null) {
+              names[id] = (name != null && name.isNotEmpty) ? name : 'Buyer';
+            }
+          }
+        } catch (profileError) {
+          debugPrint('Notice: could not load reviewer names: $profileError');
         }
       }
       for (final review in rows) {
@@ -75,9 +82,22 @@ class ReviewProvider extends ChangeNotifier {
   }) async {
     final userId = supabase.auth.currentUser?.id;
     final text = comment.trim();
-    if (userId == null || rating < 1 || rating > 5 || text.isEmpty) {
+    if (userId == null) {
+      errorMessage = 'Please sign in to write a review.';
+      notifyListeners();
       return false;
     }
+    if (rating < 1 || rating > 5) {
+      errorMessage = 'Please select a rating between 1 and 5 stars.';
+      notifyListeners();
+      return false;
+    }
+    if (text.isEmpty) {
+      errorMessage = 'Please enter your review comments.';
+      notifyListeners();
+      return false;
+    }
+
     isSaving = true;
     errorMessage = null;
     notifyListeners();
@@ -94,6 +114,30 @@ class ReviewProvider extends ChangeNotifier {
     } catch (error) {
       errorMessage = providerErrorMessage(error);
       debugPrint('Error saving product review: $error');
+      return false;
+    } finally {
+      isSaving = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> deleteReview(String productId) async {
+    final userId = supabase.auth.currentUser?.id;
+    if (userId == null) return false;
+    isSaving = true;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      await supabase
+          .from('product_reviews')
+          .delete()
+          .eq('product_id', productId)
+          .eq('user_id', userId);
+      await loadReviews(productId);
+      return true;
+    } catch (error) {
+      errorMessage = providerErrorMessage(error);
+      debugPrint('Error deleting product review: $error');
       return false;
     } finally {
       isSaving = false;

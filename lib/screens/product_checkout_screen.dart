@@ -4,7 +4,6 @@ import 'package:e_comerce_appliction/provider/userprovider.dart';
 import 'package:e_comerce_appliction/provider/orderditiyalce.dart';
 import 'package:e_comerce_appliction/provider/cardeprovider.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:e_comerce_appliction/utils/currency.dart';
 import 'package:e_comerce_appliction/utils/product_pricing.dart';
 import 'package:provider/provider.dart';
@@ -83,7 +82,9 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
   double _discount(OrderDitiyalce orderProvider) {
     final applied = orderProvider.appliedCoupon;
     if (applied == null) return 0.0;
-    return (applied['discount'] as num?)?.toDouble() ?? 0.0;
+    return (applied['discount_amount'] ?? applied['discount'] as num?)
+            ?.toDouble() ??
+        0.0;
   }
 
   double _finalTotal(OrderDitiyalce orderProvider) {
@@ -526,6 +527,20 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
       return;
     }
 
+    // Strict front-end format validation
+    final couponRegex = RegExp(r'^[A-Z0-9_-]{2,30}$');
+    if (!couponRegex.hasMatch(couponCode)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Invalid coupon format. Codes only contain letters, numbers, hyphens, and underscores.',
+          ),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
     final result = await orderProvider.applyCoupon(
       code: couponCode,
       orderAmount: _subtotal,
@@ -533,7 +548,10 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
 
     if (!mounted) return;
     if (result != null) {
-      final discountVal = (result['discount'] as num?)?.toDouble() ?? 0.0;
+      final discountVal = (result['discount_amount'] ??
+              result['discount'] as num?)
+          ?.toDouble() ??
+          0.0;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -688,7 +706,6 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
   Future<void> _placeOrder(double payableTotal) async {
     if (!_formKey.currentState!.validate()) return;
 
-    final razorpayKeyId = dotenv.env['RAZORPAY_KEY_ID']?.trim() ?? '';
     if (_paymentMethod == 'razorpay') {
       final razorpayProvider = context.read<RazorpayProvider>();
       if (!razorpayProvider.isSupportedPlatform) {
@@ -699,17 +716,6 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
             ),
             backgroundColor: Colors.orange,
             duration: Duration(seconds: 4),
-          ),
-        );
-        return;
-      }
-
-      if (!razorpayKeyId.startsWith('rzp_test_')) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Add a valid Razorpay Test Mode key ID to the app .env.',
-            ),
           ),
         );
         return;
@@ -773,13 +779,15 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
             await showDialog<bool>(
               context: context,
               barrierDismissible: false,
-              builder: (_) => _RazorpayQrDialog(
+              builder: (_) => RazorpayQrDialog(
                 imageUrl: imageUrl,
                 amount: qrAmountInPaise / 100,
                 getPaymentStatus: () =>
                     orderProvider.razorpayPaymentStatus(orderId: orderId!),
                 cancelPayment: () =>
                     orderProvider.cancelRazorpayQr(orderId: orderId!),
+                simulatePayment: () =>
+                    orderProvider.simulateTestQrPayment(orderId: orderId!),
               ),
             ) ??
             false;
@@ -800,6 +808,7 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
             paymentOrder['razorpay_order_id']?.toString() ??
             paymentOrder['id']?.toString() ??
             '';
+        final razorpayKeyId = paymentOrder['key_id']?.toString() ?? '';
         final rawAmount = paymentOrder['amount'];
         final amount = rawAmount is num
             ? rawAmount.round()
@@ -818,6 +827,11 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
             'Missing Razorpay order ID from payment service.',
           );
         }
+        if (razorpayKeyId.isEmpty) {
+          throw Exception(
+            'The payment service did not provide a valid Razorpay key ID.',
+          );
+        }
 
         if (!mounted) return;
         final PaymentSuccessResponse payment = await razorpayProvider
@@ -830,9 +844,15 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
                 'name': 'E-commerce Store',
                 'description': 'Order payment',
                 'prefill': {
-                  'name': customer['name'],
-                  'email': customer['email'],
-                  'contact': customer['phone'],
+                  'name': (customer['name']?.isNotEmpty ?? false)
+                      ? customer['name']
+                      : 'Test Buyer',
+                  'email': (customer['email']?.isNotEmpty ?? false)
+                      ? customer['email']
+                      : 'testbuyer@example.com',
+                  'contact': (customer['phone']?.isNotEmpty ?? false)
+                      ? customer['phone']
+                      : '9123456789',
                 },
                 'theme': {'color': '#2874F0'},
               },
@@ -857,10 +877,21 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
         }
       }
     } catch (error) {
+      // If Razorpay checkout crashed, was cancelled, or failed:
+      // Cancel the reservation immediately to increase/restore product inventory in the database
+      if (!paymentConfirmed && orderId != null && _paymentMethod != 'cash_on_delivery') {
+        await orderProvider.cancelRazorpayOrder(orderId: orderId);
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(error.toString().replaceFirst('Exception: ', '')),
+          content: Text(
+            error.toString().toLowerCase().contains('cancel') ||
+                    error.toString().toLowerCase().contains('dismiss')
+                ? 'Payment cancelled. Reserved product quantity has been restored.'
+                : error.toString().replaceFirst('Exception: ', ''),
+          ),
+          backgroundColor: Colors.red.shade700,
         ),
       );
     } finally {
@@ -870,9 +901,11 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
     if (!mounted || !paymentConfirmed || orderId == null) return;
 
     // Immediately refresh orders in background so both buyer and seller screens reflect the new order
-    orderProvider.loadBuyerOrders();
-    orderProvider.loadSellerOrders();
-    orderProvider.loadSellerDashboard();
+    await Future.wait([
+      orderProvider.loadBuyerOrders(),
+      orderProvider.loadSellerOrders(),
+      orderProvider.loadSellerDashboard(),
+    ]);
 
     if (_paymentMethod == 'cash_on_delivery') {
       NotificationService.instance.showOrderPlaced(
@@ -921,27 +954,31 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
   }
 }
 
-class _RazorpayQrDialog extends StatefulWidget {
-  const _RazorpayQrDialog({
+class RazorpayQrDialog extends StatefulWidget {
+  const RazorpayQrDialog({
+    super.key,
     required this.imageUrl,
     required this.amount,
     required this.getPaymentStatus,
     required this.cancelPayment,
+    this.simulatePayment,
   });
 
   final String imageUrl;
   final double amount;
   final Future<String?> Function() getPaymentStatus;
   final Future<bool> Function() cancelPayment;
+  final Future<bool> Function()? simulatePayment;
 
   @override
-  State<_RazorpayQrDialog> createState() => _RazorpayQrDialogState();
+  State<RazorpayQrDialog> createState() => _RazorpayQrDialogState();
 }
 
-class _RazorpayQrDialogState extends State<_RazorpayQrDialog> {
+class _RazorpayQrDialogState extends State<RazorpayQrDialog> {
   Timer? _pollTimer;
   bool _isPolling = false;
   bool _isCancelling = false;
+  bool _isSimulating = false;
   String _statusMessage = 'Waiting for your UPI payment...';
 
   @override
@@ -974,7 +1011,7 @@ class _RazorpayQrDialogState extends State<_RazorpayQrDialog> {
   }
 
   Future<void> _cancelPayment() async {
-    if (_isCancelling) return;
+    if (_isCancelling || _isSimulating) return;
     setState(() {
       _isCancelling = true;
       _statusMessage = 'Closing the QR and cancelling the order...';
@@ -986,7 +1023,27 @@ class _RazorpayQrDialogState extends State<_RazorpayQrDialog> {
     } else {
       setState(() {
         _isCancelling = false;
-        _statusMessage = 'Could not confirm cancellation. Payment status is still being checked.';
+        _statusMessage =
+            'Could not confirm cancellation. Payment status is still being checked.';
+      });
+    }
+  }
+
+  Future<void> _handleSimulatePayment() async {
+    if (_isSimulating || _isCancelling || widget.simulatePayment == null) return;
+    setState(() {
+      _isSimulating = true;
+      _statusMessage = 'Simulating UPI test payment...';
+    });
+    final success = await widget.simulatePayment!();
+    if (!mounted) return;
+    if (success) {
+      _pollTimer?.cancel();
+      Navigator.of(context).pop(true);
+    } else {
+      setState(() {
+        _isSimulating = false;
+        _statusMessage = 'Simulation failed. Check server logs.';
       });
     }
   }
@@ -1028,19 +1085,45 @@ class _RazorpayQrDialogState extends State<_RazorpayQrDialog> {
             const Text(
               'Scan this code in your UPI app. Payment status is checked securely.',
               textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13),
             ),
             const SizedBox(height: 8),
             Text(
               _statusMessage,
               textAlign: TextAlign.center,
-              style: TextStyle(color: Theme.of(context).colorScheme.primary),
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.primary,
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+              ),
             ),
+            if (widget.simulatePayment != null) ...[
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: _isSimulating || _isCancelling
+                    ? null
+                    : _handleSimulatePayment,
+                icon: _isSimulating
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.flash_on, color: Colors.orange, size: 16),
+                label: Text(
+                  _isSimulating
+                      ? 'Confirming...'
+                      : 'Test Mode: Simulate UPI Payment',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+            ],
           ],
         ),
       ),
       actions: [
         TextButton(
-          onPressed: _isCancelling ? null : _cancelPayment,
+          onPressed: _isCancelling || _isSimulating ? null : _cancelPayment,
           child: Text(_isCancelling ? 'Cancelling...' : 'Cancel order'),
         ),
       ],

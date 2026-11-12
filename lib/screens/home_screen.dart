@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:e_comerce_appliction/widgets/error_state.dart';
+import 'package:e_comerce_appliction/services/notification_service.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -28,6 +29,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      NotificationService.instance.requestPermission();
       final orderProvider = context.read<OrderDitiyalce>();
       orderProvider.loadNotifications();
       orderProvider.subscribeToRealtimeNotifications();

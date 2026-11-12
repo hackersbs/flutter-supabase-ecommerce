@@ -366,14 +366,18 @@ class FlipkartCardWidget extends StatelessWidget {
                         child: SizedBox(
                           height: 30,
                           child: ElevatedButton(
-                            onPressed: () {
-                              context.read<CardeProvider>().addToCart(product);
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Product added to cart'),
-                                  duration: Duration(seconds: 1),
-                                ),
-                              );
+                            onPressed: () async {
+                              final cart = context.read<CardeProvider>();
+                              final added = await cart.addToCart(product);
+                              if (!context.mounted) return;
+                              if (!added && cart.errorMessage != null) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(cart.errorMessage!),
+                                    duration: const Duration(seconds: 2),
+                                  ),
+                                );
+                              }
                             },
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.orange,

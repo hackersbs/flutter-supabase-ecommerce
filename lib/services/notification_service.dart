@@ -1,10 +1,13 @@
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-/// Notification service that provides both:
+/// Notification service that provides:
 /// 1. Device-level system local notifications (status bar / heads-up / lockscreen)
-///    via flutter_local_notifications.
-/// 2. Smooth floating in-app notification banners overlaying the UI.
+///    via flutter_local_notifications on Android and iOS.
+/// 2. Smooth floating in-app notification banners overlaying the UI on supported mobile devices.
+/// 3. Safely disabled on Windows 11 desktop to prevent platform errors and crashes.
 class NotificationService {
   NotificationService._();
   static final NotificationService instance = NotificationService._();
@@ -17,9 +20,24 @@ class NotificationService {
 
   bool _isInitialized = false;
 
-  /// Initializes local notifications on Android, iOS, macOS, and desktop.
+  /// Notifications are strictly enabled on mobile (Android / iOS).
+  /// Windows 11 and other desktop systems bypass notifications to prevent platform errors.
+  static bool get isSupportedOnDevice {
+    if (kIsWeb) return false;
+    try {
+      return Platform.isAndroid || Platform.isIOS;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Initializes local notifications on Android / iOS. Safe no-op on Windows.
   Future<void> initialize() async {
     if (_isInitialized) return;
+    if (!isSupportedOnDevice) {
+      debugPrint('Local notifications bypassed on Windows / desktop.');
+      return;
+    }
     try {
       const androidSettings =
           AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -56,6 +74,7 @@ class NotificationService {
           importance: Importance.max,
           playSound: true,
           enableVibration: true,
+          showBadge: true,
         );
         await androidPlugin.createNotificationChannel(channel);
       }
@@ -66,7 +85,24 @@ class NotificationService {
     }
   }
 
-  /// Displays both a floating in-app overlay banner and a native device notification
+  /// Explicitly requests system notification permissions (Android 13+ & iOS). No-op on Windows.
+  Future<bool?> requestPermission() async {
+    if (!isSupportedOnDevice) return true;
+    try {
+      final androidPlugin = _localNotifications
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>();
+      if (androidPlugin != null) {
+        return await androidPlugin.requestNotificationsPermission();
+      }
+    } catch (e) {
+      debugPrint('Error requesting notification permission: $e');
+    }
+    return null;
+  }
+
+  /// Displays notification on Android.
+  /// Completely skipped on Windows 11 to prevent desktop popup and plugin errors.
   Future<void> showNotification({
     required String title,
     required String body,
@@ -75,8 +111,15 @@ class NotificationService {
     Color color = const Color(0xFF2874F0),
     Duration duration = const Duration(seconds: 4),
   }) async {
-    // 1. Floating in-app notification overlay
-    messengerKey.currentState?.showSnackBar(
+    // Windows 11: safe bypass (no errors, no desktop popup)
+    if (!isSupportedOnDevice) {
+      return;
+    }
+
+    // 1. Floating in-app notification overlay (Android)
+    try {
+      messengerKey.currentState?.removeCurrentSnackBar();
+      messengerKey.currentState?.showSnackBar(
       SnackBar(
         behavior: SnackBarBehavior.floating,
         margin: const EdgeInsets.all(16),
@@ -137,11 +180,17 @@ class NotificationService {
         ),
       ),
     );
+    } catch (e) {
+      debugPrint('Notification overlay error: $e');
+    }
 
     // 2. Native system local notification on device
     try {
+      if (!_isInitialized) {
+        await initialize();
+      }
       final id = DateTime.now().millisecondsSinceEpoch.remainder(100000);
-      const NotificationDetails platformDetails = NotificationDetails(
+      final platformDetails = NotificationDetails(
         android: AndroidNotificationDetails(
           'ecommerce_channel',
           'Order & Store Updates',
@@ -152,8 +201,10 @@ class NotificationService {
           playSound: true,
           enableVibration: true,
           icon: '@mipmap/ic_launcher',
+          channelShowBadge: true,
+          styleInformation: BigTextStyleInformation(body),
         ),
-        iOS: DarwinNotificationDetails(
+        iOS: const DarwinNotificationDetails(
           presentAlert: true,
           presentBadge: true,
           presentSound: true,
@@ -172,13 +223,21 @@ class NotificationService {
     }
   }
 
-  /// Helper for Added to Cart
-  void showAddedToCart({required String productName}) {
+  /// Helper for Added to Cart (Local & In-App Notification)
+  void showAddedToCart({
+    required String productName,
+    int quantity = 1,
+    double? price,
+  }) {
+    final qtyText = quantity > 1 ? ' (Qty: $quantity)' : '';
+    final priceText =
+        price != null && price > 0 ? ' • ₹${price.toStringAsFixed(0)}' : '';
     showNotification(
       title: '🛒 Added to Cart!',
-      body: '$productName has been added to your shopping cart.',
+      body: '$productName$qtyText has been added to your shopping cart$priceText.',
       icon: Icons.add_shopping_cart,
       color: const Color(0xFF2874F0),
+      payload: 'cart',
     );
   }
 

@@ -40,6 +40,22 @@ class OrderDitiyalce extends ChangeNotifier {
     required String code,
     required double orderAmount,
   }) async {
+    final cleanCode = code.trim().toUpperCase();
+    if (cleanCode.isEmpty) {
+      errorMessage = 'Please enter a coupon code.';
+      notifyListeners();
+      return null;
+    }
+
+    // Strict regex validation against SQL injection & malformed input
+    final couponRegex = RegExp(r'^[A-Z0-9_-]{2,30}$');
+    if (!couponRegex.hasMatch(cleanCode)) {
+      errorMessage =
+          'Invalid coupon code format. Use only letters, numbers, hyphens, and underscores.';
+      notifyListeners();
+      return null;
+    }
+
     isValidatingCoupon = true;
     errorMessage = null;
     notifyListeners();
@@ -47,11 +63,19 @@ class OrderDitiyalce extends ChangeNotifier {
     try {
       final response = await supabase.rpc(
         'validate_coupon',
-        params: {'p_code': code.trim(), 'p_order_amount': orderAmount},
+        params: {'p_code': cleanCode, 'p_order_amount': orderAmount},
       );
 
       if (response is Map && response['valid'] == true) {
-        appliedCoupon = Map<String, dynamic>.from(response);
+        final couponMap = Map<String, dynamic>.from(response);
+        // Normalize discount value key so all screens can use either key
+        final discountValue = (couponMap['discount_amount'] ??
+                couponMap['discount'] as num?)
+            ?.toDouble() ??
+            0.0;
+        couponMap['discount'] = discountValue;
+        couponMap['discount_amount'] = discountValue;
+        appliedCoupon = couponMap;
         notifyListeners();
         return appliedCoupon;
       } else {
@@ -311,6 +335,137 @@ class OrderDitiyalce extends ChangeNotifier {
       return false;
     } catch (error) {
       errorMessage = providerErrorMessage(error);
+      return false;
+    } finally {
+      notifyListeners();
+    }
+  }
+
+  /// Cancels an unconfirmed / failed Razorpay order and immediately restores product inventory & coupons
+  Future<bool> cancelRazorpayOrder({required String orderId}) async {
+    errorMessage = null;
+    notifyListeners();
+    try {
+      final response = await supabase.rpc(
+        'cancel_razorpay_order',
+        params: {'p_order_id': orderId},
+      );
+      if (response is Map && response['success'] == true) {
+        // Refresh orders and seller inventory to reflect restored quantities
+        await loadSellerDashboard();
+        await loadBuyerOrders();
+        return true;
+      }
+      return false;
+    } catch (error) {
+      debugPrint('Notice: order cancellation result: $error');
+      return false;
+    } finally {
+      notifyListeners();
+    }
+  }
+
+  /// Resumes Razorpay Standard Checkout (cards, UPI, netbanking) for a pending order
+  Future<Map<String, dynamic>?> resumeRazorpayOrder({
+    required String orderId,
+  }) async {
+    final user = supabase.auth.currentUser;
+    if (user == null) {
+      errorMessage = 'Please log in to complete your payment.';
+      notifyListeners();
+      return null;
+    }
+
+    isCreating = true;
+    errorMessage = null;
+    notifyListeners();
+
+    try {
+      final response = await supabase.functions.invoke(
+        'supabase-razorpay',
+        body: {'action': 'resume-razorpay-order', 'order_id': orderId},
+      );
+
+      final data = response.data;
+      if (data is! Map || data['success'] != true) {
+        throw Exception(
+          data is Map
+              ? data['error']?.toString() ?? 'Could not resume Razorpay payment.'
+              : 'The payment service returned an invalid response.',
+        );
+      }
+      return Map<String, dynamic>.from(data);
+    } catch (error) {
+      errorMessage = providerErrorMessage(error);
+      debugPrint('Error resuming Razorpay order: $error');
+      return null;
+    } finally {
+      isCreating = false;
+      notifyListeners();
+    }
+  }
+
+  /// Resumes or generates a UPI QR code for a pending order
+  Future<Map<String, dynamic>?> resumeRazorpayQrCode({
+    required String orderId,
+  }) async {
+    final user = supabase.auth.currentUser;
+    if (user == null) {
+      errorMessage = 'Please log in to complete your payment.';
+      notifyListeners();
+      return null;
+    }
+
+    isCreating = true;
+    errorMessage = null;
+    notifyListeners();
+
+    try {
+      final response = await supabase.functions.invoke(
+        'supabase-razorpay',
+        body: {'action': 'resume-razorpay-qr', 'order_id': orderId},
+      );
+
+      final data = response.data;
+      if (data is! Map || data['success'] != true) {
+        throw Exception(
+          data is Map
+              ? data['error']?.toString() ?? 'Could not generate payment QR.'
+              : 'The payment service returned an invalid response.',
+        );
+      }
+      return Map<String, dynamic>.from(data);
+    } catch (error) {
+      errorMessage = providerErrorMessage(error);
+      debugPrint('Error resuming Razorpay QR code: $error');
+      return null;
+    } finally {
+      isCreating = false;
+      notifyListeners();
+    }
+  }
+
+  /// Simulates UPI payment completion in Test Mode for instant verification
+  Future<bool> simulateTestQrPayment({required String orderId}) async {
+    errorMessage = null;
+    notifyListeners();
+    try {
+      final response = await supabase.functions.invoke(
+        'supabase-razorpay',
+        body: {'action': 'simulate-test-qr-payment', 'order_id': orderId},
+      );
+
+      final data = response.data;
+      if (data is Map && data['success'] == true) {
+        return true;
+      }
+      errorMessage = data is Map
+          ? data['error']?.toString() ?? 'Simulation failed.'
+          : 'Invalid response from server.';
+      return false;
+    } catch (error) {
+      errorMessage = providerErrorMessage(error);
+      debugPrint('Error simulating QR payment: $error');
       return false;
     } finally {
       notifyListeners();
@@ -677,6 +832,9 @@ class OrderDitiyalce extends ChangeNotifier {
             if (newRecord.isNotEmpty) {
               notifications.insert(0, newRecord);
               notifyListeners();
+
+              // On Windows 11, bypass system notification banners to prevent desktop errors
+              if (!NotificationService.isSupportedOnDevice) return;
 
               final title = newRecord['title']?.toString() ?? 'Order Notification';
               final message = newRecord['message']?.toString() ?? 'You have a new update.';

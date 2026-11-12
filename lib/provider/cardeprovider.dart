@@ -113,8 +113,13 @@ class CardeProvider extends ChangeNotifier {
       }
       notifyListeners();
     } else {
+      final currentItem = cartItems[existingIndex == -1
+          ? cartItems.length - 1
+          : existingIndex];
       NotificationService.instance.showAddedToCart(
         productName: product['name']?.toString() ?? 'Product',
+        quantity: (currentItem['quantity'] as num?)?.toInt() ?? 1,
+        price: activeProductPrice(product),
       );
     }
     return saved;
