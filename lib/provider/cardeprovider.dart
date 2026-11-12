@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:e_comerce_appliction/utils/error_handling.dart';
 import 'package:e_comerce_appliction/utils/product_pricing.dart';
+import 'package:e_comerce_appliction/services/notification_service.dart';
 
 class CardeProvider extends ChangeNotifier {
   final SupabaseClient supabase = Supabase.instance.client;
@@ -111,6 +112,10 @@ class CardeProvider extends ChangeNotifier {
         cartItems[existingIndex]['quantity'] = previousQuantity;
       }
       notifyListeners();
+    } else {
+      NotificationService.instance.showAddedToCart(
+        productName: product['name']?.toString() ?? 'Product',
+      );
     }
     return saved;
   }

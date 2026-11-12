@@ -17,6 +17,7 @@ class FilterScreen extends StatefulWidget {
 }
 
 class _FilterScreenState extends State<FilterScreen> {
+  late final ScrollController _scrollController;
   double _minimumPrice = 0;
   double _maximumPrice = 100000;
   double _priceLimit = 100000;
@@ -27,12 +28,35 @@ class _FilterScreenState extends State<FilterScreen> {
   @override
   void initState() {
     super.initState();
+    _scrollController = ScrollController();
+    _scrollController.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final provider = context.read<Productprovider>();
       if (provider.products.isEmpty && !provider.isLoading) {
         provider.getProduct();
       }
     });
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final maxScroll = _scrollController.position.maxScrollExtent;
+    final currentScroll = _scrollController.position.pixels;
+    if (maxScroll > 0 && maxScroll - currentScroll <= 250) {
+      final provider = context.read<Productprovider>();
+      if (!provider.isLoading &&
+          !provider.isLoadingMore &&
+          provider.hasMoreProducts) {
+        provider.loadMoreProducts();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
+    super.dispose();
   }
 
   void _resetFilters() {
@@ -141,6 +165,7 @@ class _FilterScreenState extends State<FilterScreen> {
           }
 
           return CustomScrollView(
+            controller: _scrollController,
             slivers: [
               SliverToBoxAdapter(
                 child: _FilterPanel(
@@ -185,9 +210,37 @@ class _FilterScreenState extends State<FilterScreen> {
                   child: Center(child: CircularProgressIndicator()),
                 )
               else if (filteredProducts.isEmpty)
-                const SliverFillRemaining(
+                SliverFillRemaining(
+                  hasScrollBody: false,
                   child: Center(
-                    child: Text('No products match these filters.'),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text('No products match these filters.'),
+                        if (provider.hasMoreProducts) ...[
+                          const SizedBox(height: 12),
+                          OutlinedButton.icon(
+                            onPressed: provider.isLoadingMore
+                                ? null
+                                : () => provider.loadMoreProducts(),
+                            icon: provider.isLoadingMore
+                                ? const SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.download, size: 16),
+                            label: Text(
+                              provider.isLoadingMore
+                                  ? 'Loading more...'
+                                  : 'Load more products',
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
                 )
               else
@@ -209,6 +262,81 @@ class _FilterScreenState extends State<FilterScreen> {
                         product: filteredProducts[index],
                       );
                     }, childCount: filteredProducts.length),
+                  ),
+                ),
+              if (provider.isLoadingMore)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(
+                            width: 28,
+                            height: 28,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                            ),
+                          ),
+                          SizedBox(height: 8),
+                          Text(
+                            'Loading more products...',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              if (provider.loadMoreErrorMessage != null)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          provider.loadMoreErrorMessage!,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            context.read<Productprovider>().loadMoreProducts();
+                          },
+                          icon: const Icon(Icons.refresh, size: 16),
+                          label: const Text('Retry'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              if (!provider.isLoading &&
+                  !provider.isLoadingMore &&
+                  !provider.hasMoreProducts &&
+                  filteredProducts.isNotEmpty)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 20),
+                    child: Center(
+                      child: Text(
+                        'No more products to show',
+                        style: TextStyle(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSurfaceVariant
+                              .withValues(alpha: 0.7),
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               const SliverToBoxAdapter(child: SizedBox(height: 20)),

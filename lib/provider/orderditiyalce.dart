@@ -181,7 +181,7 @@ class OrderDitiyalce extends ChangeNotifier {
       return Map<String, dynamic>.from(data);
     } catch (error) {
       errorMessage = providerErrorMessage(error);
-      debugPrint('Error creating Razorpay order: $error');
+      debugPrint('Error creating Razorpay order: ${error.runtimeType}');
       return null;
     } finally {
       isCreating = false;
@@ -219,7 +219,7 @@ class OrderDitiyalce extends ChangeNotifier {
       return true;
     } catch (error) {
       errorMessage = providerErrorMessage(error);
-      debugPrint('Error verifying Razorpay payment: $error');
+      debugPrint('Error verifying Razorpay payment: ${error.runtimeType}');
       return false;
     } finally {
       notifyListeners();
@@ -571,12 +571,44 @@ class OrderDitiyalce extends ChangeNotifier {
           .from('orders')
           .update({'status': status})
           .eq('id', orderId);
+
+      String title = 'Order update';
+      String message = 'Your order is now $status.';
+      if (status == 'packed' || status == 'packaged') {
+        title = 'Order Packaged 📦';
+        message = 'Your order has been packed and is ready to ship.';
+      } else if (status == 'shipped') {
+        title = 'Order Shipped 🚚';
+        message = 'Your order has been shipped and is on the way.';
+      } else if (status == 'delivered') {
+        title = 'Order Delivered 🎉';
+        message = 'Your order has been delivered successfully. Enjoy!';
+      } else if (status == 'cancelled') {
+        title = 'Order Cancelled ❌';
+        message = 'Your order has been cancelled.';
+      }
+
       await supabase.from('notifications').insert({
         'user_id': buyerId,
         'order_id': orderId,
-        'title': 'Order update',
-        'message': 'Your order is now $status.',
+        'title': title,
+        'message': message,
       });
+
+      // Immediate seller-side local alert feedback
+      if (status == 'packed' || status == 'packaged') {
+        NotificationService.instance.showOrderPackaged(orderId: orderId);
+      } else if (status == 'shipped') {
+        NotificationService.instance.showOrderShipped(orderId: orderId);
+      } else if (status == 'delivered') {
+        NotificationService.instance.showSellerOrderDelivered(
+          orderId: orderId,
+          customerName: 'Buyer',
+        );
+      } else if (status == 'cancelled') {
+        NotificationService.instance.showOrderCancelled(orderId: orderId);
+      }
+
       await loadSellerOrders();
       return true;
     } catch (error) {
@@ -660,10 +692,24 @@ class OrderDitiyalce extends ChangeNotifier {
                   icon: Icons.assignment_return_outlined,
                   color: Colors.deepOrange,
                 );
+              } else if (titleLower.contains('payment') ||
+                  titleLower.contains('paid') ||
+                  messageLower.contains('paid') ||
+                  messageLower.contains('payment')) {
+                NotificationService.instance.showNotification(
+                  title: title,
+                  body: message,
+                  icon: Icons.payment,
+                  color: Colors.teal,
+                );
+              } else if (titleLower.contains('pack') || messageLower.contains('pack')) {
+                NotificationService.instance.showOrderPackaged(orderId: orderId ?? 'Order');
               } else if (titleLower.contains('shipped') || messageLower.contains('shipped')) {
                 NotificationService.instance.showOrderShipped(orderId: orderId ?? 'Order');
               } else if (titleLower.contains('delivered') || messageLower.contains('delivered')) {
                 NotificationService.instance.showOrderDelivered(orderId: orderId ?? 'Order');
+              } else if (titleLower.contains('cancel') || messageLower.contains('cancel')) {
+                NotificationService.instance.showOrderCancelled(orderId: orderId ?? 'Order');
               } else {
                 NotificationService.instance.showNotification(
                   title: title,

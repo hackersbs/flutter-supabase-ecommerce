@@ -95,15 +95,32 @@ class HomePageContent extends StatefulWidget {
 class _HomePageContentState extends State<HomePageContent> {
   final TextEditingController _searchController = TextEditingController();
   final SpeechToText _speechToText = SpeechToText();
+  late final ScrollController _scrollController;
   String _selectedCategory = 'All';
   bool _isListening = false;
 
   @override
   void initState() {
     super.initState();
+    _scrollController = ScrollController();
+    _scrollController.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<Productprovider>().getProduct();
     });
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final maxScroll = _scrollController.position.maxScrollExtent;
+    final currentScroll = _scrollController.position.pixels;
+    if (maxScroll > 0 && maxScroll - currentScroll <= 250) {
+      final productProvider = context.read<Productprovider>();
+      if (!productProvider.isLoading &&
+          !productProvider.isLoadingMore &&
+          productProvider.hasMoreProducts) {
+        productProvider.loadMoreProducts();
+      }
+    }
   }
 
   Future<void> _toggleVoiceSearch() async {
@@ -162,6 +179,8 @@ class _HomePageContentState extends State<HomePageContent> {
 
   @override
   void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
     _speechToText.stop();
     _searchController.dispose();
     super.dispose();
@@ -285,6 +304,7 @@ class _HomePageContentState extends State<HomePageContent> {
             }).toList();
 
             return CustomScrollView(
+              controller: _scrollController,
               slivers: [
                 SliverToBoxAdapter(
                   child: SearchBarWidget(
@@ -357,8 +377,38 @@ class _HomePageContentState extends State<HomePageContent> {
                     child: Center(child: CircularProgressIndicator()),
                   )
                 else if (filteredProducts.isEmpty)
-                  const SliverFillRemaining(
-                    child: Center(child: Text('No products found.')),
+                  SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text('No products found.'),
+                          if (provider.hasMoreProducts) ...[
+                            const SizedBox(height: 12),
+                            OutlinedButton.icon(
+                              onPressed: provider.isLoadingMore
+                                  ? null
+                                  : () => provider.loadMoreProducts(),
+                              icon: provider.isLoadingMore
+                                  ? const SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.download, size: 16),
+                              label: Text(
+                                provider.isLoadingMore
+                                    ? 'Loading more...'
+                                    : 'Check next products',
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
                   )
                 else
                   SliverPadding(
@@ -378,6 +428,79 @@ class _HomePageContentState extends State<HomePageContent> {
                         final product = filteredProducts[index];
                         return FlipkartCardWidget(product: product);
                       }, childCount: filteredProducts.length),
+                    ),
+                  ),
+                if (provider.isLoadingMore)
+                  const SliverToBoxAdapter(
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(vertical: 24),
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(
+                              width: 28,
+                              height: 28,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.5,
+                              ),
+                            ),
+                            SizedBox(height: 8),
+                            Text(
+                              'Loading more products...',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                if (provider.loadMoreErrorMessage != null)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            provider.loadMoreErrorMessage!,
+                            style: TextStyle(
+                              color: theme.colorScheme.error,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          OutlinedButton.icon(
+                            onPressed: () {
+                              context.read<Productprovider>().loadMoreProducts();
+                            },
+                            icon: const Icon(Icons.refresh, size: 16),
+                            label: const Text('Retry'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (!provider.isLoading &&
+                    !provider.isLoadingMore &&
+                    !provider.hasMoreProducts &&
+                    filteredProducts.isNotEmpty)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 20),
+                      child: Center(
+                        child: Text(
+                          'No more products to show',
+                          style: TextStyle(
+                            color: theme.colorScheme.onSurfaceVariant
+                                .withValues(alpha: 0.7),
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 const SliverToBoxAdapter(child: SizedBox(height: 20)),

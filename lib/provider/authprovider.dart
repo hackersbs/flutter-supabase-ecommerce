@@ -166,7 +166,7 @@ class AthenDiction extends ChangeNotifier {
     } catch (e) {
       errorMessage = _authErrorMessage(e, signingUp: false);
       notifyListeners();
-      debugPrint('Login failed: $e');
+      debugPrint('Login failed: ${e.runtimeType}');
       // Optional: show a snackbar here
       if (context.mounted) {
         ScaffoldMessenger.of(context)
@@ -230,7 +230,7 @@ class AthenDiction extends ChangeNotifier {
     } catch (e) {
       errorMessage = _authErrorMessage(e, signingUp: true);
       notifyListeners();
-      debugPrint('Sign up failed: $e');
+      debugPrint('Sign up failed: ${e.runtimeType}');
       // Optional: show a snackbar here
       if (context.mounted) {
         ScaffoldMessenger.of(context)

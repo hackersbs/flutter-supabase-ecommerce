@@ -686,7 +686,86 @@ async function confirmPayment({
       error: error?.message ?? "Payment could not be confirmed. Contact support with the payment ID.",
     }, 500);
   }
+
+  // Ensure both buyer & seller get informed immediately with full buyer details
+  await ensurePaymentNotifications(admin, orderId, paymentId);
+
   return jsonResponse({ success: true, order_id: orderId, status: "paid" });
+}
+
+async function ensurePaymentNotifications(admin, orderId, paymentId) {
+  try {
+    const { data: order } = await admin
+      .from("orders")
+      .select("id, user_id, customer_name, total_price, payment_method, status")
+      .eq("id", orderId)
+      .maybeSingle();
+
+    if (!order) return;
+
+    const { data: items } = await admin
+      .from("order_items")
+      .select("seller_id, product_name, quantity")
+      .eq("order_id", orderId);
+
+    const shortId = orderId.slice(0, 8);
+    const method = order.payment_method || "Razorpay";
+    const total = order.total_price;
+    const buyerName = order.customer_name || "Customer";
+    const buyerId = order.user_id;
+
+    // 1. Notify Buyer
+    await admin.from("notifications").insert({
+      user_id: buyerId,
+      order_id: orderId,
+      title: "Payment Successful! 🎉",
+      message: `Your payment of ₹${total} for Order #${shortId} was successful via ${method}.`,
+    });
+
+    await admin.from("push_notification_logs").insert({
+      user_id: buyerId,
+      order_id: orderId,
+      title: "Payment Successful! 🎉",
+      body: `Your payment of ₹${total} for Order #${shortId} was completed.`,
+      data: { order_id: orderId, type: "payment_success", status: "paid" },
+    });
+
+    // 2. Group items by seller and notify each seller
+    if (items && items.length > 0) {
+      const sellerMap = new Map();
+      for (const item of items) {
+        if (!item.seller_id) continue;
+        const current = sellerMap.get(item.seller_id) || [];
+        current.push(`${item.product_name} (x${item.quantity})`);
+        sellerMap.set(item.seller_id, current);
+      }
+
+      for (const [sellerId, productList] of sellerMap.entries()) {
+        const productSummary = productList.join(", ");
+        await admin.from("notifications").insert({
+          user_id: sellerId,
+          order_id: orderId,
+          title: "Payment Received & Order Paid! 💰",
+          message: `Buyer ${buyerName} (Buyer ID: ${buyerId}) successfully paid ₹${total} via ${method} for Order #${shortId}. Products: ${productSummary}`,
+        });
+
+        await admin.from("push_notification_logs").insert({
+          user_id: sellerId,
+          order_id: orderId,
+          title: "Payment Received & Order Paid! 💰",
+          body: `Buyer ${buyerName} (ID: ${buyerId}) paid ₹${total} for ${productSummary}.`,
+          data: {
+            order_id: orderId,
+            type: "payment_success",
+            buyer_id: buyerId,
+            payment_id: paymentId,
+          },
+        });
+      }
+    }
+  } catch (err) {
+    console.error("ensurePaymentNotifications error:", err);
+  }
 }
 
 async function handleQrCodeCredited(event, eventId) {
@@ -738,6 +817,7 @@ async function handleQrCodeCredited(event, eventId) {
     console.error("Atomic QR payment confirmation failed:", confirmError?.message);
     return jsonResponse({ error: confirmError?.message ?? "QR payment could not be confirmed." }, 500);
   }
+  await ensurePaymentNotifications(admin, record.order_id, payment.id);
   return jsonResponse({ success: true, order_id: record.order_id, status: "paid" });
 }
 

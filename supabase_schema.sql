@@ -352,8 +352,41 @@ create policy "Users can read own push logs"
 revoke all on public.payment_webhook_events from public, anon, authenticated;
 grant all on public.payment_webhook_events to service_role;
 
-create policy "Authenticated users can read profiles"
-on public.users for select to authenticated using (true);
+create or replace function public.can_read_user_profile(target_user_id uuid)
+returns boolean
+language sql stable security definer
+set search_path = public
+as $$
+  select (
+    -- User's own profile
+    auth.uid() = target_user_id
+    -- Seller accessing buyer profile if buyer purchased seller's items
+    or exists (
+      select 1
+      from public.orders o
+      join public.order_items oi on oi.order_id = o.id
+      where o.user_id = target_user_id and oi.seller_id = auth.uid()
+    )
+    -- Buyer accessing seller profile for purchased items
+    or exists (
+      select 1
+      from public.orders o
+      join public.order_items oi on oi.order_id = o.id
+      where o.user_id = auth.uid() and oi.seller_id = target_user_id
+    )
+    -- Public view of registered sellers
+    or exists (
+      select 1 from public.users u
+      where u.id = target_user_id and u.role = 'Seller'
+    )
+  );
+$$;
+revoke all on function public.can_read_user_profile(uuid) from public;
+grant execute on function public.can_read_user_profile(uuid) to authenticated;
+
+create policy "Strict profile access control"
+on public.users for select to authenticated
+using (public.can_read_user_profile(id));
 create policy "Users can update own profile"
 on public.users for update to authenticated
 using (auth.uid() = id) with check (auth.uid() = id);
@@ -461,9 +494,30 @@ on public.orders for update to authenticated
 using (public.seller_has_order(id))
 with check (status in ('pending', 'packed', 'shipped', 'out for delivery', 'delivered', 'cancelled'));
 
-create policy "Sellers can create buyer notifications"
+create or replace function public.is_buyer_of_seller_order(target_user_id uuid, target_order_id uuid)
+returns boolean
+language sql stable security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.orders o
+    join public.order_items oi on oi.order_id = o.id
+    where o.id = target_order_id
+      and o.user_id = target_user_id
+      and oi.seller_id = auth.uid()
+      and o.status <> 'cancelled'
+  );
+$$;
+revoke all on function public.is_buyer_of_seller_order(uuid, uuid) from public;
+grant execute on function public.is_buyer_of_seller_order(uuid, uuid) to authenticated;
+
+create policy "Sellers can only notify verified buyers of their orders"
 on public.notifications for insert to authenticated
-with check (public.seller_has_order(order_id));
+with check (
+  order_id is not null
+  and public.is_buyer_of_seller_order(user_id, order_id)
+);
 create policy "Users can update own notifications"
 on public.notifications for update to authenticated
 using (auth.uid() = user_id) with check (auth.uid() = user_id);
@@ -495,6 +549,23 @@ with check (
 create policy "Users can read own messages"
 on public.messages for select to authenticated
 using (auth.uid() = sender_id or auth.uid() = receiver_id);
+
+create policy "Users can only send messages to verified buyers or sellers"
+on public.messages for insert to authenticated
+with check (
+  auth.uid() = sender_id
+  and exists (
+    select 1
+    from public.order_items oi
+    join public.orders o on o.id = oi.order_id
+    where (
+      (o.user_id = auth.uid() and oi.seller_id = receiver_id)
+      or (o.user_id = receiver_id and oi.seller_id = auth.uid())
+    )
+    and (order_id is null or oi.order_id = order_id)
+    and o.status <> 'cancelled'
+  )
+);
 
 create policy "Users can mark received messages read"
 on public.messages for update to authenticated
@@ -533,8 +604,9 @@ begin
       or (o.user_id = p_receiver_id and oi.seller_id = v_sender_id)
     )
     and (p_order_id is null or oi.order_id = p_order_id)
+    and o.status <> 'cancelled'
   ) then
-    raise exception 'You are not allowed to send a message to this user';
+    raise exception 'You can only message users who have an active purchase relationship';
   end if;
 
   insert into public.messages (
@@ -635,6 +707,7 @@ declare
   v_clean_code text := upper(trim(coalesce(p_coupon_code, '')));
   v_coupon public.coupons%rowtype;
   v_discount numeric(12,2) := 0;
+  v_seller record;
 begin
   if v_user_id is null then
     raise exception 'You must be logged in to place an order';
@@ -752,6 +825,62 @@ begin
 
   update public.orders set total_price = v_final_total, updated_at = now()
   where id = v_order_id;
+
+  -- 1. Notify buyer about order placement
+  insert into public.notifications (user_id, order_id, title, message)
+  values (
+    v_user_id,
+    v_order_id,
+    'Order Placed Successfully! 🛍️',
+    format('Your order #%s has been placed for ₹%s (%s).', substr(v_order_id::text, 1, 8), v_final_total, p_payment_method)
+  );
+
+  insert into public.push_notification_logs (user_id, order_id, title, body, data)
+  values (
+    v_user_id,
+    v_order_id,
+    'Order Placed Successfully! 🛍️',
+    format('Your order #%s has been placed for ₹%s.', substr(v_order_id::text, 1, 8), v_final_total),
+    jsonb_build_object('order_id', v_order_id, 'type', 'new_order')
+  );
+
+  -- 2. Notify each distinct seller involved with products & buyer details
+  for v_seller in
+    select seller_id, string_agg(product_name || ' (x' || quantity || ')', ', ') as products
+    from public.order_items
+    where order_id = v_order_id
+    group by seller_id
+  loop
+    insert into public.notifications (user_id, order_id, title, message)
+    values (
+      v_seller.seller_id,
+      v_order_id,
+      'New Order Received! 🔔',
+      format('Buyer %s (ID: %s) placed order #%s for ₹%s (%s). Products: %s',
+        coalesce(p_customer->>'name', 'Customer'),
+        v_user_id,
+        substr(v_order_id::text, 1, 8),
+        v_final_total,
+        p_payment_method,
+        v_seller.products
+      )
+    );
+
+    insert into public.push_notification_logs (user_id, order_id, title, body, data)
+    values (
+      v_seller.seller_id,
+      v_order_id,
+      'New Order Received! 🔔',
+      format('Buyer %s (ID: %s) ordered %s for ₹%s.',
+        coalesce(p_customer->>'name', 'Customer'),
+        v_user_id,
+        v_seller.products,
+        v_final_total
+      ),
+      jsonb_build_object('order_id', v_order_id, 'type', 'new_order', 'buyer_id', v_user_id)
+    );
+  end loop;
+
   return v_order_id;
 end;
 $$;
@@ -776,6 +905,7 @@ declare
   v_clean_code text := upper(trim(coalesce(p_code, '')));
   v_coupon public.coupons%rowtype;
   v_discount numeric(12,2) := 0;
+  v_seller record;
 begin
   if v_clean_code = '' then
     return jsonb_build_object('valid', false, 'message', 'Please enter a coupon code');
@@ -944,6 +1074,7 @@ create or replace function public.enforce_order_status_transition()
 returns trigger
 language plpgsql
 security definer
+set search_path = public
 as $$
 begin
   -- No-op if status hasn't changed
@@ -1314,49 +1445,246 @@ security definer
 set search_path = public
 as $$
 declare
-  v_seller_id uuid;
+  v_seller record;
 begin
   if tg_op = 'INSERT' then
-    -- When a new order is inserted, notify each distinct seller involved in the order
-    for v_seller_id in
-      select distinct seller_id from public.order_items where order_id = new.id
+    -- When a new order is inserted with items, notify sellers
+    for v_seller in
+      select seller_id, string_agg(product_name || ' (x' || quantity || ')', ', ') as products
+      from public.order_items
+      where order_id = new.id
+      group by seller_id
     loop
       insert into public.notifications (user_id, order_id, title, message)
       values (
-        v_seller_id,
+        v_seller.seller_id,
         new.id,
-        'New Order Received!',
-        format('Customer %s placed an order for ₹%s (Payment: %s).', new.customer_name, new.total_price, new.payment_method)
+        'New Order Received! 🔔',
+        format('Buyer %s (ID: %s) placed order #%s for ₹%s (%s). Products: %s',
+          coalesce(new.customer_name, 'Customer'),
+          new.user_id,
+          substr(new.id::text, 1, 8),
+          new.total_price,
+          new.payment_method,
+          v_seller.products
+        )
       );
 
       insert into public.push_notification_logs (user_id, order_id, title, body, data)
       values (
-        v_seller_id,
+        v_seller.seller_id,
         new.id,
-        'New Order Received!',
-        format('You have a new order (#%s) for ₹%s.', substr(new.id::text, 1, 8), new.total_price),
-        jsonb_build_object('order_id', new.id, 'type', 'new_order')
+        'New Order Received! 🔔',
+        format('Buyer %s placed an order for ₹%s.', coalesce(new.customer_name, 'Customer'), new.total_price),
+        jsonb_build_object('order_id', new.id, 'type', 'new_order', 'buyer_id', new.user_id)
       );
     end loop;
 
   elsif tg_op = 'UPDATE' and old.status is distinct from new.status then
-    -- When status changes, notify buyer
-    insert into public.notifications (user_id, order_id, title, message)
-    values (
-      new.user_id,
-      new.id,
-      format('Order Status: %s', initcap(new.status)),
-      format('Your order status has been updated to "%s".', new.status)
-    );
+    -- 1. PAYMENT RECEIVED & PAID (Razorpay checkout / webhook)
+    if new.status = 'paid' then
+      -- Notify Buyer
+      insert into public.notifications (user_id, order_id, title, message)
+      values (
+        new.user_id,
+        new.id,
+        'Payment Successful! 🎉',
+        format('Your payment of ₹%s for Order #%s was completed successfully via %s.',
+          new.total_price, substr(new.id::text, 1, 8), coalesce(new.payment_method, 'Razorpay'))
+      );
+      insert into public.push_notification_logs (user_id, order_id, title, body, data)
+      values (
+        new.user_id,
+        new.id,
+        'Payment Successful! 🎉',
+        format('Payment of ₹%s for Order #%s was successful.', new.total_price, substr(new.id::text, 1, 8)),
+        jsonb_build_object('order_id', new.id, 'type', 'payment_success', 'status', 'paid')
+      );
 
-    insert into public.push_notification_logs (user_id, order_id, title, body, data)
-    values (
-      new.user_id,
-      new.id,
-      format('Order Status: %s', initcap(new.status)),
-      format('Your order is now %s.', new.status),
-      jsonb_build_object('order_id', new.id, 'type', 'order_status', 'status', new.status)
-    );
+      -- Notify each Seller with Buyer Name, Buyer ID, Amount, and Products!
+      for v_seller in
+        select seller_id, string_agg(product_name || ' (x' || quantity || ')', ', ') as products
+        from public.order_items
+        where order_id = new.id
+        group by seller_id
+      loop
+        insert into public.notifications (user_id, order_id, title, message)
+        values (
+          v_seller.seller_id,
+          new.id,
+          'Payment Received & Order Paid! 💰',
+          format('Buyer %s (Buyer ID: %s) successfully paid ₹%s via %s for Order #%s. Products: %s',
+            coalesce(new.customer_name, 'Buyer'),
+            new.user_id,
+            new.total_price,
+            coalesce(new.payment_method, 'Razorpay'),
+            substr(new.id::text, 1, 8),
+            coalesce(v_seller.products, 'items'))
+        );
+        insert into public.push_notification_logs (user_id, order_id, title, body, data)
+        values (
+          v_seller.seller_id,
+          new.id,
+          'Payment Received & Order Paid! 💰',
+          format('Buyer %s (ID: %s) paid ₹%s for %s.',
+            coalesce(new.customer_name, 'Buyer'),
+            new.user_id,
+            new.total_price,
+            coalesce(v_seller.products, 'items')),
+          jsonb_build_object('order_id', new.id, 'type', 'payment_success', 'buyer_id', new.user_id)
+        );
+      end loop;
+
+    -- 2. ORDER PACKED / PACKAGED
+    elsif new.status in ('packed', 'packaged', 'processing') then
+      -- Notify Buyer
+      insert into public.notifications (user_id, order_id, title, message)
+      values (
+        new.user_id,
+        new.id,
+        'Order Packaged 📦',
+        format('Your order #%s has been packed and is getting ready for shipment.', substr(new.id::text, 1, 8))
+      );
+      insert into public.push_notification_logs (user_id, order_id, title, body, data)
+      values (
+        new.user_id,
+        new.id,
+        'Order Packaged 📦',
+        format('Order #%s has been packed and will ship soon.', substr(new.id::text, 1, 8)),
+        jsonb_build_object('order_id', new.id, 'type', 'order_status', 'status', new.status)
+      );
+
+      -- Notify Seller confirmation
+      for v_seller in select distinct seller_id from public.order_items where order_id = new.id loop
+        insert into public.notifications (user_id, order_id, title, message)
+        values (
+          v_seller.seller_id,
+          new.id,
+          'Package Ready 📦',
+          format('Order #%s has been marked as packed for customer %s.', substr(new.id::text, 1, 8), coalesce(new.customer_name, 'Customer'))
+        );
+      end loop;
+
+    -- 3. ORDER SHIPPED
+    elsif new.status = 'shipped' then
+      -- Notify Buyer
+      insert into public.notifications (user_id, order_id, title, message)
+      values (
+        new.user_id,
+        new.id,
+        'Order Shipped 🚚',
+        format('Your order #%s has been shipped and is on the way to you.', substr(new.id::text, 1, 8))
+      );
+      insert into public.push_notification_logs (user_id, order_id, title, body, data)
+      values (
+        new.user_id,
+        new.id,
+        'Order Shipped 🚚',
+        format('Your order #%s is on the way.', substr(new.id::text, 1, 8)),
+        jsonb_build_object('order_id', new.id, 'type', 'order_status', 'status', 'shipped')
+      );
+
+      -- Notify Seller
+      for v_seller in select distinct seller_id from public.order_items where order_id = new.id loop
+        insert into public.notifications (user_id, order_id, title, message)
+        values (
+          v_seller.seller_id,
+          new.id,
+          'Order In Transit 🚚',
+          format('Order #%s has been shipped to customer %s.', substr(new.id::text, 1, 8), coalesce(new.customer_name, 'Customer'))
+        );
+      end loop;
+
+    -- 4. OUT FOR DELIVERY
+    elsif new.status = 'out for delivery' then
+      insert into public.notifications (user_id, order_id, title, message)
+      values (
+        new.user_id,
+        new.id,
+        'Out for Delivery 🛵',
+        format('Your order #%s is out for delivery today!', substr(new.id::text, 1, 8))
+      );
+      insert into public.push_notification_logs (user_id, order_id, title, body, data)
+      values (
+        new.user_id,
+        new.id,
+        'Out for Delivery 🛵',
+        format('Order #%s is out for delivery today.', substr(new.id::text, 1, 8)),
+        jsonb_build_object('order_id', new.id, 'type', 'order_status', 'status', 'out for delivery')
+      );
+
+    -- 5. DELIVERED
+    elsif new.status = 'delivered' then
+      -- Notify Buyer
+      insert into public.notifications (user_id, order_id, title, message)
+      values (
+        new.user_id,
+        new.id,
+        'Order Delivered 🎉',
+        format('Your order #%s has been delivered. Enjoy your purchase!', substr(new.id::text, 1, 8))
+      );
+      insert into public.push_notification_logs (user_id, order_id, title, body, data)
+      values (
+        new.user_id,
+        new.id,
+        'Order Delivered 🎉',
+        format('Order #%s was delivered.', substr(new.id::text, 1, 8)),
+        jsonb_build_object('order_id', new.id, 'type', 'order_status', 'status', 'delivered')
+      );
+
+      -- Notify Seller: Package Delivered!
+      for v_seller in select distinct seller_id from public.order_items where order_id = new.id loop
+        insert into public.notifications (user_id, order_id, title, message)
+        values (
+          v_seller.seller_id,
+          new.id,
+          'Package Delivered ✅',
+          format('Order #%s for customer %s (Buyer ID: %s) has been successfully delivered.',
+            substr(new.id::text, 1, 8), coalesce(new.customer_name, 'Customer'), new.user_id)
+        );
+        insert into public.push_notification_logs (user_id, order_id, title, body, data)
+        values (
+          v_seller.seller_id,
+          new.id,
+          'Package Delivered ✅',
+          format('Order #%s was delivered to %s.', substr(new.id::text, 1, 8), coalesce(new.customer_name, 'Customer')),
+          jsonb_build_object('order_id', new.id, 'type', 'order_status', 'status', 'delivered')
+        );
+      end loop;
+
+    -- 6. CANCELLED
+    elsif new.status = 'cancelled' then
+      -- Notify Buyer
+      insert into public.notifications (user_id, order_id, title, message)
+      values (
+        new.user_id,
+        new.id,
+        'Order Cancelled ❌',
+        format('Your order #%s has been cancelled.', substr(new.id::text, 1, 8))
+      );
+
+      -- Notify Seller
+      for v_seller in select distinct seller_id from public.order_items where order_id = new.id loop
+        insert into public.notifications (user_id, order_id, title, message)
+        values (
+          v_seller.seller_id,
+          new.id,
+          'Order Cancelled ❌',
+          format('Order #%s for buyer %s (ID: %s) was cancelled.',
+            substr(new.id::text, 1, 8), coalesce(new.customer_name, 'Customer'), new.user_id)
+        );
+      end loop;
+
+    -- 7. OTHER STATUSES
+    else
+      insert into public.notifications (user_id, order_id, title, message)
+      values (
+        new.user_id,
+        new.id,
+        format('Order Status: %s', initcap(new.status)),
+        format('Your order status has been updated to "%s".', new.status)
+      );
+    end if;
   end if;
 
   return new;

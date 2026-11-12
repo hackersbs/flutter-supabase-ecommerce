@@ -60,7 +60,7 @@ class UserProvider extends ChangeNotifier {
       return true;
     } catch (error) {
       errorMessage = providerErrorMessage(error);
-      debugPrint('Error updating password: $error');
+      debugPrint('Error updating password: ${error.runtimeType}');
       return false;
     }
   }

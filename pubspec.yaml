@@ -43,6 +43,7 @@ dependencies:
   speech_to_text: ^7.0.0
   razorpay_flutter: ^1.4.7
   crypto: ^3.0.7
+  flutter_local_notifications: ^23.0.0
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -12,6 +12,7 @@ import 'package:e_comerce_appliction/widgets/image_url.dart';
 import 'package:e_comerce_appliction/widgets/error_state.dart';
 import 'package:e_comerce_appliction/provider/razorpayprovider.dart';
 import 'package:razorpay_flutter/razorpay_flutter.dart';
+import 'package:e_comerce_appliction/services/notification_service.dart';
 
 class ProductCheckoutScreen extends StatefulWidget {
   final List<Map<String, dynamic>> products;
@@ -794,8 +795,6 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
           );
         }
 
-        debugPrint('Razorpay Order Response: $paymentOrder');
-
         orderId = paymentOrder['order_id']?.toString();
         final razorpayOrderId =
             paymentOrder['razorpay_order_id']?.toString() ??
@@ -811,12 +810,12 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
 
         if (orderId == null || orderId.isEmpty) {
           throw Exception(
-            'Missing internal order ID from payment service: $paymentOrder',
+            'Missing internal order ID from payment service.',
           );
         }
         if (razorpayOrderId.isEmpty) {
           throw Exception(
-            'Missing Razorpay order ID from payment service: $paymentOrder',
+            'Missing Razorpay order ID from payment service.',
           );
         }
 
@@ -874,6 +873,19 @@ class _ProductCheckoutScreenState extends State<ProductCheckoutScreen> {
     orderProvider.loadBuyerOrders();
     orderProvider.loadSellerOrders();
     orderProvider.loadSellerDashboard();
+
+    if (_paymentMethod == 'cash_on_delivery') {
+      NotificationService.instance.showOrderPlaced(
+        orderId: orderId,
+        totalAmount: payableTotal,
+        paymentMethod: 'Cash on Delivery',
+      );
+    } else {
+      NotificationService.instance.showPaymentSuccess(
+        orderId: orderId,
+        amount: payableTotal,
+      );
+    }
 
     await showDialog<void>(
       context: context,

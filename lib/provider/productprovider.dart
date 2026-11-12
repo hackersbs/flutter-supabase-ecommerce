@@ -12,8 +12,68 @@ class Productprovider extends ChangeNotifier {
   bool isLoading = false;
   String? errorMessage;
 
+  static const int pageSize = 12;
+  bool isLoadingMore = false;
+  bool hasMoreProducts = true;
+  String? loadMoreErrorMessage;
+
   Future<void> getProduct() async {
+    hasMoreProducts = true;
+    loadMoreErrorMessage = null;
     await _loadProducts();
+  }
+
+  Future<void> refreshProducts() async {
+    hasMoreProducts = true;
+    loadMoreErrorMessage = null;
+    await _loadProducts();
+  }
+
+  Future<void> loadMoreProducts() async {
+    if (isLoading || isLoadingMore || !hasMoreProducts) return;
+
+    isLoadingMore = true;
+    loadMoreErrorMessage = null;
+    notifyListeners();
+
+    try {
+      final from = products.length;
+      final to = from + pageSize - 1;
+
+      final response = await supabase
+          .from('product')
+          .select('*')
+          .order('created_at', ascending: false)
+          .range(from, to);
+
+      final newItems = List<Map<String, dynamic>>.from(response);
+
+      if (newItems.isEmpty) {
+        hasMoreProducts = false;
+      } else {
+        if (newItems.length < pageSize) {
+          hasMoreProducts = false;
+        }
+
+        final existingIds = products
+            .map((p) => p['id']?.toString())
+            .whereType<String>()
+            .toSet();
+
+        for (final item in newItems) {
+          final id = item['id']?.toString();
+          if (id == null || !existingIds.contains(id)) {
+            products.add(item);
+          }
+        }
+      }
+    } catch (e) {
+      loadMoreErrorMessage = providerErrorMessage(e);
+      debugPrint('Error loading more products: $e');
+    } finally {
+      isLoadingMore = false;
+      notifyListeners();
+    }
   }
 
   Future<void> getSellerProducts() async {
@@ -30,18 +90,22 @@ class Productprovider extends ChangeNotifier {
   Future<void> _loadProducts({String? userId}) async {
     isLoading = true;
     errorMessage = null;
+    loadMoreErrorMessage = null;
     notifyListeners();
     try {
-      var query = supabase.from('product').select('*');
-      if (userId != null) {
-        query = query.eq('user_id', userId);
-      }
+      final dynamic baseQuery = supabase.from('product').select('*');
+      final dynamic query = userId != null
+          ? baseQuery.eq('user_id', userId).order('created_at', ascending: false)
+          : baseQuery
+              .order('created_at', ascending: false)
+              .range(0, pageSize - 1);
       final response = await query;
       products = List<Map<String, dynamic>>.from(response);
-      await loadLikes();
       if (userId == null) {
+        hasMoreProducts = products.length >= pageSize;
         await loadPopularProducts();
       }
+      await loadLikes();
     } catch (e) {
       errorMessage = providerErrorMessage(e);
       debugPrint('Error fetching products: $e');
